@@ -2,6 +2,7 @@ package streamProtocols
 
 import (
 	"fmt"
+	"golang.org/x/net/context"
 	"net"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ type TCPServer struct {
 	announceMiddlewareOpts any
 	sessions               map[string]Session
 	sessionsMutex          sync.RWMutex
-	stop                   chan bool
+	ctx                    context.Context
 }
 
 type TCPSession struct {
@@ -27,12 +28,13 @@ type TCPSession struct {
 	ClientAddr   net.Addr    //Client Address (IP:Port)
 	DataChannel  chan []byte //Data Channel, this will be handled top level
 	LastReceived time.Time   //Last time a packet was recieved
-	sessionStop  chan bool
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
-func NewTCP(host string, port uint16) *TCPServer {
+func NewTCP(host string, port uint16, ctx context.Context) *TCPServer {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &TCPServer{addr: addr, stop: make(chan bool)}
+	return &TCPServer{addr: addr, ctx: ctx}
 }
 
 func (t *TCPServer) StartReceiveStream() error {
@@ -47,30 +49,40 @@ func (t *TCPServer) StartReceiveStream() error {
 }
 
 func (t *TCPServer) StopReceiveStream() error {
+	err := t.conn.Close()
+	if err != nil {
+		return err
+	}
+	t.ctx.Done()
 	return nil
 }
 
 func (t *TCPServer) receiveStream() {
 	for {
-		sConn, err := t.conn.Accept() //Session connection
-		if err != nil {
-			fmt.Printf("Error from connection: %s\n", err)
-			continue
+		select {
+		case <-t.ctx.Done():
+			return
+		default:
+			sConn, err := t.conn.Accept() //Session connection
+			if err != nil {
+				fmt.Printf("Error from connection: %s\n", err)
+				continue
+			}
+			clientAddrStr := sConn.RemoteAddr().String()
+			var session Session
+			var ok bool
+			//If session does not exist create new one
+			t.sessionsMutex.RLock()
+			if session, ok = t.sessions[clientAddrStr]; !ok {
+				t.sessionsMutex.RUnlock()
+				session = t.newSession(sConn.RemoteAddr(), sConn, t.ctx)
+			}
+			go session.receiveBytes()
 		}
-		clientAddrStr := sConn.RemoteAddr().String()
-		var session Session
-		var ok bool
-		//If session does not exist create new one
-		t.sessionsMutex.RLock()
-		if session, ok = t.sessions[clientAddrStr]; !ok {
-			t.sessionsMutex.RUnlock()
-			session = t.newSession(sConn.RemoteAddr(), sConn)
-		}
-		go session.receiveBytes(nil)
 	}
 }
 
-func (t *TCPServer) newSession(addr net.Addr, sConn net.Conn) Session {
+func (t *TCPServer) newSession(addr net.Addr, sConn net.Conn, ctx context.Context) Session {
 	newSession := TCPSession{
 		TCPServer:    t,
 		SessionID:    uuid.NewString(),
@@ -79,6 +91,8 @@ func (t *TCPServer) newSession(addr net.Addr, sConn net.Conn) Session {
 		LastReceived: time.Now(),
 		sConn:        sConn,
 	}
+	newSession.ctx, newSession.cancel = context.WithCancel(ctx)
+
 	fmt.Printf("New session created %v - Session ID: %v\n", addr.String(), newSession.SessionID)
 	t.sessionsMutex.Lock()
 	t.sessions[addr.String()] = &newSession
@@ -111,28 +125,26 @@ func (s *TCPSession) SendToClient(data []byte) error {
 	return nil
 }
 
-func (s *TCPSession) receiveBytes(data []byte) {
+func (s *TCPSession) receiveBytes(data ...[]byte) {
 	//Data is not used, it only is for UDP
 	//Will need to implement a delimeter at some point for any streaming functionality
 	//Will need to implement read deadline
 	//Will need to implement nil pointer checks for terminated connection
 	buffer := make([]byte, 10240)
 	for {
-		if len(s.stop) == 1 {
-			<-s.stop
-			break
+		select {
+		case <-s.ctx.Done():
+			s.CloseSession()
+			return
+		default:
+			_, err := s.sConn.Read(buffer)
+			if err != nil {
+				//I REALLY NEED TO CREATE A LOGGER
+				fmt.Printf("Error while reading from connection: %s\n", err)
+				continue
+			}
+			s.DataChannel <- buffer
 		}
-		if len(s.sessionStop) == 1 {
-			<-s.sessionStop
-			break
-		}
-		_, err := s.sConn.Read(buffer)
-		if err != nil {
-			//I REALLY NEED TO CREATE A LOGGER
-			fmt.Printf("Error while reading from connection: %s\n", err)
-			continue
-		}
-		s.DataChannel <- buffer
 	}
 }
 
@@ -141,7 +153,7 @@ func (s *TCPSession) Data() (DataFromClient chan []byte) {
 }
 
 func (s *TCPSession) CloseSession() {
-	s.sessionStop <- true
+	defer s.cancel()
 	s.conn.Close()
 	close(s.DataChannel)
 	s.sessionsMutex.Lock()

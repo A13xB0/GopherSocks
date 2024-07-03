@@ -1,6 +1,7 @@
 package streamProtocols
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -17,7 +18,7 @@ type UDPServer struct {
 	sessionsMutex          sync.RWMutex           //Mutex for sessions
 	announceMiddleware     AnnounceMiddlewareFunc //Middleware for announcing new session
 	announceMiddlewareOpts any                    //Options for middleware
-	stop                   chan bool              //Stop channel
+	ctx                    context.Context
 }
 
 type UDPSession struct {
@@ -30,9 +31,9 @@ type UDPSession struct {
 }
 
 // Create new UDP Listener Object
-func NewUDP(host string, port uint16) *UDPServer {
+func NewUDP(host string, port uint16, ctx context.Context) *UDPServer {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &UDPServer{addr: addr, stop: make(chan bool), sessions: make(map[string]Session)}
+	return &UDPServer{addr: addr, ctx: ctx, sessions: make(map[string]Session)}
 }
 
 // Start Go Routine to listen for UDP packets
@@ -50,7 +51,7 @@ func (u *UDPServer) StartReceiveStream() error {
 
 // Stops Receiving stream
 func (u *UDPServer) StopReceiveStream() error {
-	u.stop <- true
+
 	if err := u.conn.Close(); err != nil {
 		return err
 	}
@@ -70,29 +71,29 @@ func (u *UDPServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, optio
 func (u *UDPServer) receiveStream() {
 	buffer := make([]byte, 10240)
 	for {
-		if len(u.stop) == 1 {
-			<-u.stop
-			break
+		select {
+		case <-u.ctx.Done():
+			return
+		default:
+			n, addr, err := u.conn.ReadFrom(buffer)
+			if err != nil {
+				//I REALLY NEED TO CREATE A LOGGER
+				fmt.Printf("Error while reading from connection: %s\n", err)
+				continue
+			}
+			clientAddrStr := addr.String()
+			var session Session
+			var ok bool
+			//If session does not exist create new one
+			u.sessionsMutex.RLock()
+			if session, ok = u.sessions[clientAddrStr]; !ok {
+				u.sessionsMutex.RUnlock()
+				session = u.newSession(addr, buffer[:n])
+			} else {
+				u.sessionsMutex.RUnlock()
+				session.receiveBytes(buffer[:n])
+			}
 		}
-		n, addr, err := u.conn.ReadFrom(buffer)
-		if err != nil {
-			//I REALLY NEED TO CREATE A LOGGER
-			fmt.Printf("Error while reading from connection: %s\n", err)
-			continue
-		}
-		clientAddrStr := addr.String()
-		var session Session
-		var ok bool
-		//If session does not exist create new one
-		u.sessionsMutex.RLock()
-		if session, ok = u.sessions[clientAddrStr]; !ok {
-			u.sessionsMutex.RUnlock()
-			session = u.newSession(addr, buffer[:n])
-		} else {
-			u.sessionsMutex.RUnlock()
-			session.receiveBytes(buffer[:n])
-		}
-
 	}
 }
 
@@ -139,12 +140,13 @@ func (s *UDPSession) SendToClient(data []byte) error {
 }
 
 // Sends bytes to the appropriate channel
-func (s *UDPSession) receiveBytes(data []byte) {
+func (s *UDPSession) receiveBytes(data ...[]byte) {
 	s.lastReceivedMutex.Lock()
 	s.LastReceived = time.Now()
 	s.lastReceivedMutex.Unlock()
-
-	s.DataChannel <- data
+	for _, d := range data {
+		s.DataChannel <- d
+	}
 }
 
 // Allows for data channel to be accessed
