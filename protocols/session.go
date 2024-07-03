@@ -1,4 +1,4 @@
-package streamProtocols
+package protocols
 
 import (
 	"net"

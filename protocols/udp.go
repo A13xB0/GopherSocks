@@ -1,4 +1,4 @@
-package streamProtocols
+package protocols
 
 import (
 	"context"
@@ -19,6 +19,7 @@ type UDPServer struct {
 	announceMiddleware     AnnounceMiddlewareFunc //Middleware for announcing new session
 	announceMiddlewareOpts any                    //Options for middleware
 	ctx                    context.Context
+	UDPConfig
 }
 
 type UDPSession struct {
@@ -30,10 +31,13 @@ type UDPSession struct {
 	lastReceivedMutex sync.Mutex
 }
 
+type UDPConfig struct {
+}
+
 // Create new UDP Listener Object
-func NewUDP(host string, port uint16, ctx context.Context) *UDPServer {
+func NewUDP(host string, port uint16, ctx context.Context, config UDPConfig) (*UDPServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &UDPServer{addr: addr, ctx: ctx, sessions: make(map[string]Session)}
+	return &UDPServer{addr: addr, ctx: ctx, UDPConfig: config, sessions: make(map[string]Session)}, nil
 }
 
 // Start Go Routine to listen for UDP packets

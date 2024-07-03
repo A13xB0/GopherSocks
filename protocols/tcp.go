@@ -1,4 +1,4 @@
-package streamProtocols
+package protocols
 
 import (
 	"fmt"
@@ -19,6 +19,7 @@ type TCPServer struct {
 	sessions               map[string]Session
 	sessionsMutex          sync.RWMutex
 	ctx                    context.Context
+	TCPConfig
 }
 
 type TCPSession struct {
@@ -32,9 +33,12 @@ type TCPSession struct {
 	cancel       context.CancelFunc
 }
 
-func NewTCP(host string, port uint16, ctx context.Context) *TCPServer {
+type TCPConfig struct {
+}
+
+func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*TCPServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &TCPServer{addr: addr, ctx: ctx}
+	return &TCPServer{addr: addr, ctx: ctx, TCPConfig: config}, nil
 }
 
 func (t *TCPServer) StartReceiveStream() error {
@@ -73,8 +77,9 @@ func (t *TCPServer) receiveStream() {
 			var ok bool
 			//If session does not exist create new one
 			t.sessionsMutex.RLock()
-			if session, ok = t.sessions[clientAddrStr]; !ok {
-				t.sessionsMutex.RUnlock()
+			session, ok = t.sessions[clientAddrStr]
+			t.sessionsMutex.RUnlock()
+			if !ok {
 				session = t.newSession(sConn.RemoteAddr(), sConn, t.ctx)
 			}
 			go session.receiveBytes()

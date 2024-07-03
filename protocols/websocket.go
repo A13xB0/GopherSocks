@@ -1,4 +1,4 @@
-package streamProtocols
+package protocols
 
 import (
 	"fmt"
@@ -16,11 +16,12 @@ type WebSocketServer struct {
 	httpServer             *http.Server
 	upgrader               websocket.Upgrader
 	addr                   string
-	sessions               map[string]*WebSocketSession
+	sessions               map[string]Session
 	sessionsMutex          sync.RWMutex
 	announceMiddleware     AnnounceMiddlewareFunc
 	announceMiddlewareOpts any
 	ctx                    context.Context
+	WebsocketsConfig
 }
 
 type WebSocketSession struct {
@@ -32,17 +33,23 @@ type WebSocketSession struct {
 	lastReceivedMutex sync.Mutex
 }
 
-func NewWebSocket(host string, port uint16, ctx context.Context) *WebSocketServer {
+type WebsocketsConfig struct {
+	ReadBufferSize  int
+	WriteBufferSize int
+}
+
+func NewWebSocket(host string, port uint16, ctx context.Context, config WebsocketsConfig) (*WebSocketServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
+			ReadBufferSize:  config.ReadBufferSize,
+			WriteBufferSize: config.WriteBufferSize,
 		},
-		addr:     addr,
-		ctx:      ctx,
-		sessions: make(map[string]*WebSocketSession),
-	}
+		addr:             addr,
+		ctx:              ctx,
+		sessions:         make(map[string]Session),
+		WebsocketsConfig: config,
+	}, nil
 }
 
 func (w *WebSocketServer) StartReceiveStream() error {
@@ -66,12 +73,9 @@ func (w *WebSocketServer) StartReceiveStream() error {
 
 func (w *WebSocketServer) StopReceiveStream() error {
 	defer w.ctx.Done()
-	w.sessionsMutex.Lock()
 	for _, session := range w.sessions {
 		session.CloseSession()
 	}
-	w.sessions = make(map[string]*WebSocketSession)
-	w.sessionsMutex.Unlock()
 	return nil
 }
 
@@ -95,8 +99,8 @@ func (w *WebSocketServer) handleConnections(rw http.ResponseWriter, req *http.Re
 	}
 }
 
-func (w *WebSocketServer) newSession(conn *websocket.Conn) *WebSocketSession {
-	newSession := &WebSocketSession{
+func (w *WebSocketServer) newSession(conn *websocket.Conn) Session {
+	newSession := WebSocketSession{
 		WebSocketServer: w,
 		SessionID:       uuid.NewString(),
 		ClientConn:      conn,
@@ -105,20 +109,20 @@ func (w *WebSocketServer) newSession(conn *websocket.Conn) *WebSocketSession {
 	}
 	fmt.Printf("New session created %v - Session ID: %v\n", conn.RemoteAddr().String(), newSession.SessionID)
 	w.sessionsMutex.Lock()
-	w.sessions[conn.RemoteAddr().String()] = newSession
+	w.sessions[conn.RemoteAddr().String()] = &newSession
 	w.sessionsMutex.Unlock()
 	newSession.receiveBytes(nil)
 	if w.announceMiddleware != nil {
-		w.announceMiddleware(w.announceMiddlewareOpts, newSession)
+		w.announceMiddleware(w.announceMiddlewareOpts, &newSession)
 	}
-	return newSession
+	return &newSession
 }
 
-func (w *WebSocketServer) GetActiveSessions() map[string]*WebSocketSession {
+func (w *WebSocketServer) GetActiveSessions() map[string]Session {
 	return w.sessions
 }
 
-func (w *WebSocketServer) GetSession(ClientAddr string) *WebSocketSession {
+func (w *WebSocketServer) GetSession(ClientAddr string) Session {
 	w.sessionsMutex.RLock()
 	defer w.sessionsMutex.RUnlock()
 	return w.sessions[ClientAddr]

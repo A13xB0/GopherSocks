@@ -2,16 +2,8 @@
 package stream
 
 import (
-	"fmt"
-	streamProtocols "github.com/A13xB0/GopherSocks/protocols"
-)
-
-type StreamType int
-
-const (
-	UDP       = 1
-	TCP       = 2
-	WEBSOCKET = 3
+	"context"
+	protocols "github.com/A13xB0/GopherSocks/protocols"
 )
 
 // Stream defines the interface for streaming TCP and UDP connections
@@ -23,26 +15,55 @@ type Stream interface {
 	StopReceiveStream() error
 
 	//Sets middlware for announcing a new session
-	SetAnnounceNewSession(function streamProtocols.AnnounceMiddlewareFunc, options any)
+	SetAnnounceNewSession(function protocols.AnnounceMiddlewareFunc, options any)
 
 	//Getters
 
 	//Get all sessions
-	GetActiveSessions() map[string]streamProtocols.Session
+	GetActiveSessions() map[string]protocols.Session
 
 	//Get session from ClientAddr (IP:Port)
-	GetSession(ClientAddr string) streamProtocols.Session
+	GetSession(ClientAddr string) protocols.Session
 }
 
-func New(host string, port uint16, stype StreamType) (Stream, error) {
-	switch stype {
-	case UDP:
-		return streamProtocols.NewUDP(host, port), nil
-	case TCP:
-		return streamProtocols.NewTCP(host, port), nil
-	case WEBSOCKET:
-		return streamProtocols.NewWebSocket(host, port), nil
-	default:
-		return nil, fmt.Errorf("Streaming Protocol is not valid")
+// New creates a new Stream handler for your chosen stream type
+func NewTCP(host string, port uint16, opts ...TCPOptFunc) (Stream, error) {
+	return NewTCPWithContext(host, port, context.Background(), opts...)
+}
+
+// NewWithContext creates a new Stream handler for your chosen stream type, with context
+func NewTCPWithContext(host string, port uint16, ctx context.Context, opts ...TCPOptFunc) (Stream, error) {
+	tcpConfig := tcpDefaultConfig()
+	for _, fn := range opts {
+		fn(&tcpConfig)
 	}
+	return protocols.NewTCP(host, port, ctx, tcpConfig)
+}
+
+// New creates a new Stream handler for your chosen stream type
+func NewUDP(host string, port uint16, opts ...UDPOptFunc) (Stream, error) {
+	return NewUDPWithContext(host, port, context.Background(), opts...)
+}
+
+// NewWithContext creates a new Stream handler for your chosen stream type, with context
+func NewUDPWithContext(host string, port uint16, ctx context.Context, opts ...UDPOptFunc) (Stream, error) {
+	udpConfig := udpDefaultConfig()
+	for _, fn := range opts {
+		fn(&udpConfig)
+	}
+	return protocols.NewUDP(host, port, ctx, udpConfig)
+}
+
+// New creates a new Stream handler for your chosen stream type
+func NewWebsockets(host string, port uint16, opts ...WebsocketOptFunc) (Stream, error) {
+	return NewWebsocketsWithContext(host, port, context.Background(), opts...)
+}
+
+// NewWithContext creates a new Stream handler for your chosen stream type, with context
+func NewWebsocketsWithContext(host string, port uint16, ctx context.Context, opts ...WebsocketOptFunc) (Stream, error) {
+	wsConfig := websocketDefaultConfig()
+	for _, fn := range opts {
+		fn(&wsConfig)
+	}
+	return protocols.NewWebSocket(host, port, ctx, wsConfig)
 }
