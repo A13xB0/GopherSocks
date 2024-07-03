@@ -46,7 +46,12 @@ func (u *UDPServer) StartReceiveStream() error {
 	u.conn = conn
 	//Start receive stream
 	go u.receiveStream()
-	return nil
+	for {
+		select {
+		case <-u.ctx.Done():
+			return u.conn.Close()
+		}
+	}
 }
 
 // Stops Receiving stream

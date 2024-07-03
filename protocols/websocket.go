@@ -13,6 +13,7 @@ import (
 )
 
 type WebSocketServer struct {
+	httpServer             *http.Server
 	upgrader               websocket.Upgrader
 	addr                   string
 	sessions               map[string]*WebSocketSession
@@ -45,12 +46,22 @@ func NewWebSocket(host string, port uint16, ctx context.Context) *WebSocketServe
 }
 
 func (w *WebSocketServer) StartReceiveStream() error {
-	http.HandleFunc("/", w.handleConnections)
-	err := http.ListenAndServe(w.addr, nil)
-	if err != nil {
-		return err
+	w.httpServer = &http.Server{
+		Addr:    w.addr,
+		Handler: http.HandlerFunc(w.handleConnections),
 	}
-	return nil
+	errchan := make(chan error, 1)
+	go func() {
+		errchan <- w.httpServer.ListenAndServe()
+	}()
+	for {
+		select {
+		case err := <-errchan:
+			return err
+		case <-w.ctx.Done():
+			return w.httpServer.Close()
+		}
+	}
 }
 
 func (w *WebSocketServer) StopReceiveStream() error {

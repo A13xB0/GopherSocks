@@ -44,7 +44,7 @@ func (t *TCPServer) StartReceiveStream() error {
 		return err
 	}
 	t.conn = conn
-	go t.receiveStream()
+	t.receiveStream()
 	return nil
 }
 
