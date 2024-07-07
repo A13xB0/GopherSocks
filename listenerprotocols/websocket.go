@@ -110,7 +110,6 @@ func (w *WebSocketServer) newSession(conn *websocket.Conn) Session {
 		DataChannel:     make(chan []byte, 100),
 		LastReceived:    time.Now(),
 	}
-	fmt.Printf("New session created %v - Session ID: %v\n", conn.RemoteAddr().String(), newSession.SessionID)
 	w.sessionsMutex.Lock()
 	w.sessions[conn.RemoteAddr().String()] = &newSession
 	w.sessionsMutex.Unlock()
@@ -132,7 +131,7 @@ func (w *WebSocketServer) GetSession(ClientAddr string) Session {
 }
 
 func (s *WebSocketSession) SendToClient(data []byte) error {
-	if err := s.ClientConn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := s.ClientConn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 		return err
 	}
 	return nil
@@ -144,6 +143,9 @@ func (s *WebSocketSession) receiveBytes(data ...[]byte) {
 	s.lastReceivedMutex.Unlock()
 
 	for _, d := range data {
+		if len(d) == 0 {
+			continue
+		}
 		s.DataChannel <- d
 	}
 }

@@ -40,7 +40,7 @@ type TCPConfig struct {
 func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*TCPServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
 	tcpContext, cancel := context.WithCancel(ctx)
-	return &TCPServer{addr: addr, ctx: tcpContext, cancel: cancel, TCPConfig: config}, nil
+	return &TCPServer{addr: addr, ctx: tcpContext, cancel: cancel, TCPConfig: config, sessions: make(map[string]Session)}, nil
 }
 
 func (t *TCPServer) StartReceiveStream() error {
@@ -73,7 +73,7 @@ func (t *TCPServer) receiveStream() {
 		default:
 			sConn, err := t.conn.Accept() //Session connection
 			if err != nil {
-				fmt.Printf("Error from connection: %s\n", err)
+				fmt.Printf("Error accepting new connection: %s", err)
 				continue
 			}
 			clientAddrStr := sConn.RemoteAddr().String()
@@ -133,7 +133,6 @@ func (s *TCPSession) SendToClient(data []byte) error {
 }
 
 func (s *TCPSession) receiveBytes(data ...[]byte) {
-	//Data is not used, it only is for UDP
 	//Will need to implement a delimeter at some point for any streaming functionality
 	//Will need to implement read deadline
 	//Will need to implement nil pointer checks for terminated connection

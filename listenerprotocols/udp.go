@@ -85,7 +85,6 @@ func (u *UDPServer) receiveStream() {
 		default:
 			n, addr, err := u.conn.ReadFrom(buffer)
 			if err != nil {
-				fmt.Printf("Error while reading from connection: %s\n", err)
 				continue
 			}
 			clientAddrStr := addr.String()
@@ -108,12 +107,11 @@ func (u *UDPServer) receiveStream() {
 func (u *UDPServer) newSession(addr net.Addr, buffer []byte) Session {
 	newSession := UDPSession{
 		UDPServer:    u,
-		SessionID:    uuid.NewString(),
+		SessionID:    uuid.New().String(),
 		ClientAddr:   addr,
 		DataChannel:  make(chan []byte, 100),
 		LastReceived: time.Now(),
 	}
-	fmt.Printf("New session created %v - Session ID: %v\n", addr.String(), newSession.SessionID)
 	// No lock needed as lock is in the calling function
 	u.sessionsMutex.Lock()
 	u.sessions[addr.String()] = &newSession
