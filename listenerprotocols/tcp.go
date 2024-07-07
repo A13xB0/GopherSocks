@@ -133,9 +133,9 @@ func (s *TCPSession) SendToClient(data []byte) error {
 }
 
 func (s *TCPSession) receiveBytes(data ...[]byte) {
-	//Will need to implement a delimeter at some point for any streaming functionality
-	//Will need to implement read deadline
-	//Will need to implement nil pointer checks for terminated connection
+	//todo: Will need to implement a delimeter at some point for any streaming functionality
+	//todo: Will need to implement read deadline
+	//todo: Will need to implement nil pointer checks for terminated connection
 	buffer := make([]byte, 10240)
 	for {
 		select {
