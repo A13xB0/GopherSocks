@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	gophersocks "github.com/A13xB0/GopherSocks"
+	"github.com/A13xB0/GopherSocks/listenerprotocols"
 	"os"
 	"os/signal"
 	"syscall"
