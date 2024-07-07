@@ -1,26 +1,28 @@
 package gophersocks
 
-import "github.com/A13xB0/GopherSocks/protocols"
+import (
+	"github.com/A13xB0/GopherSocks/listenerprotocols"
+)
 
 // TCP
-type TCPOptFunc func(config *protocols.TCPConfig)
+type TCPOptFunc func(config *listenerprotocols.TCPConfig)
 
-func tcpDefaultConfig() protocols.TCPConfig {
-	return protocols.TCPConfig{}
+func tcpDefaultConfig() listenerprotocols.TCPConfig {
+	return listenerprotocols.TCPConfig{}
 }
 
 // UDP
-type UDPOptFunc func(config *protocols.UDPConfig)
+type UDPOptFunc func(config *listenerprotocols.UDPConfig)
 
-func udpDefaultConfig() protocols.UDPConfig {
-	return protocols.UDPConfig{}
+func udpDefaultConfig() listenerprotocols.UDPConfig {
+	return listenerprotocols.UDPConfig{}
 }
 
 // Websockets
-type WebsocketOptFunc func(config *protocols.WebsocketsConfig)
+type WebsocketOptFunc func(config *listenerprotocols.WebsocketsConfig)
 
-func websocketDefaultConfig() protocols.WebsocketsConfig {
-	return protocols.WebsocketsConfig{
+func websocketDefaultConfig() listenerprotocols.WebsocketsConfig {
+	return listenerprotocols.WebsocketsConfig{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 	}
