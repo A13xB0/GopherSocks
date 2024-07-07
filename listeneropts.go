@@ -1,4 +1,4 @@
-package stream
+package gophersocks
 
 import "github.com/A13xB0/GopherSocks/protocols"
 

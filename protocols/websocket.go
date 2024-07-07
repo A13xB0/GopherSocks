@@ -21,6 +21,7 @@ type WebSocketServer struct {
 	announceMiddleware     AnnounceMiddlewareFunc
 	announceMiddlewareOpts any
 	ctx                    context.Context
+	cancel                 context.CancelFunc
 	WebsocketsConfig
 }
 
@@ -40,13 +41,15 @@ type WebsocketsConfig struct {
 
 func NewWebSocket(host string, port uint16, ctx context.Context, config WebsocketsConfig) (*WebSocketServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
+	wsContext, cancel := context.WithCancel(ctx)
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  config.ReadBufferSize,
 			WriteBufferSize: config.WriteBufferSize,
 		},
 		addr:             addr,
-		ctx:              ctx,
+		ctx:              wsContext,
+		cancel:           cancel,
 		sessions:         make(map[string]Session),
 		WebsocketsConfig: config,
 	}, nil
@@ -72,7 +75,7 @@ func (w *WebSocketServer) StartReceiveStream() error {
 }
 
 func (w *WebSocketServer) StopReceiveStream() error {
-	defer w.ctx.Done()
+	defer w.cancel()
 	for _, session := range w.sessions {
 		session.CloseSession()
 	}

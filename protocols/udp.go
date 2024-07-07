@@ -19,6 +19,7 @@ type UDPServer struct {
 	announceMiddleware     AnnounceMiddlewareFunc //Middleware for announcing new session
 	announceMiddlewareOpts any                    //Options for middleware
 	ctx                    context.Context
+	cancel                 context.CancelFunc
 	UDPConfig
 }
 
@@ -37,7 +38,8 @@ type UDPConfig struct {
 // Create new UDP Listener Object
 func NewUDP(host string, port uint16, ctx context.Context, config UDPConfig) (*UDPServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &UDPServer{addr: addr, ctx: ctx, UDPConfig: config, sessions: make(map[string]Session)}, nil
+	udpContext, cancel := context.WithCancel(ctx)
+	return &UDPServer{addr: addr, ctx: udpContext, cancel: cancel, UDPConfig: config, sessions: make(map[string]Session)}, nil
 }
 
 // Start Go Routine to listen for UDP packets
@@ -60,13 +62,10 @@ func (u *UDPServer) StartReceiveStream() error {
 
 // Stops Receiving stream
 func (u *UDPServer) StopReceiveStream() error {
-
-	if err := u.conn.Close(); err != nil {
-		return err
+	for _, session := range u.sessions {
+		session.CloseSession()
 	}
-	u.sessionsMutex.Lock()
-	clear(u.sessions)
-	u.sessionsMutex.Unlock()
+	u.cancel()
 	return nil
 }
 
@@ -86,7 +85,6 @@ func (u *UDPServer) receiveStream() {
 		default:
 			n, addr, err := u.conn.ReadFrom(buffer)
 			if err != nil {
-				//I REALLY NEED TO CREATE A LOGGER
 				fmt.Printf("Error while reading from connection: %s\n", err)
 				continue
 			}

@@ -1,13 +1,13 @@
 // This package handles streaming protocols as an interface
-package stream
+package gophersocks
 
 import (
 	"context"
 	protocols "github.com/A13xB0/GopherSocks/protocols"
 )
 
-// Stream defines the interface for streaming TCP and UDP connections
-type Stream interface {
+// Listener defines the interface for streaming TCP and UDP connections
+type Listener interface {
 	//Starts listener for stream transport
 	StartReceiveStream() error
 
@@ -27,12 +27,12 @@ type Stream interface {
 }
 
 // New creates a new Stream handler for your chosen stream type
-func NewTCP(host string, port uint16, opts ...TCPOptFunc) (Stream, error) {
-	return NewTCPWithContext(host, port, context.Background(), opts...)
+func NewTCPListener(host string, port uint16, opts ...TCPOptFunc) (Listener, error) {
+	return NewTCPListenerWithContext(host, port, context.Background(), opts...)
 }
 
 // NewWithContext creates a new Stream handler for your chosen stream type, with context
-func NewTCPWithContext(host string, port uint16, ctx context.Context, opts ...TCPOptFunc) (Stream, error) {
+func NewTCPListenerWithContext(host string, port uint16, ctx context.Context, opts ...TCPOptFunc) (Listener, error) {
 	tcpConfig := tcpDefaultConfig()
 	for _, fn := range opts {
 		fn(&tcpConfig)
@@ -41,12 +41,12 @@ func NewTCPWithContext(host string, port uint16, ctx context.Context, opts ...TC
 }
 
 // New creates a new Stream handler for your chosen stream type
-func NewUDP(host string, port uint16, opts ...UDPOptFunc) (Stream, error) {
-	return NewUDPWithContext(host, port, context.Background(), opts...)
+func NewUDPListener(host string, port uint16, opts ...UDPOptFunc) (Listener, error) {
+	return NewUDPListenerWithContext(host, port, context.Background(), opts...)
 }
 
 // NewWithContext creates a new Stream handler for your chosen stream type, with context
-func NewUDPWithContext(host string, port uint16, ctx context.Context, opts ...UDPOptFunc) (Stream, error) {
+func NewUDPListenerWithContext(host string, port uint16, ctx context.Context, opts ...UDPOptFunc) (Listener, error) {
 	udpConfig := udpDefaultConfig()
 	for _, fn := range opts {
 		fn(&udpConfig)
@@ -55,12 +55,12 @@ func NewUDPWithContext(host string, port uint16, ctx context.Context, opts ...UD
 }
 
 // New creates a new Stream handler for your chosen stream type
-func NewWebsockets(host string, port uint16, opts ...WebsocketOptFunc) (Stream, error) {
-	return NewWebsocketsWithContext(host, port, context.Background(), opts...)
+func NewWebsocketsListener(host string, port uint16, opts ...WebsocketOptFunc) (Listener, error) {
+	return NewWebsocketsListenerWithContext(host, port, context.Background(), opts...)
 }
 
 // NewWithContext creates a new Stream handler for your chosen stream type, with context
-func NewWebsocketsWithContext(host string, port uint16, ctx context.Context, opts ...WebsocketOptFunc) (Stream, error) {
+func NewWebsocketsListenerWithContext(host string, port uint16, ctx context.Context, opts ...WebsocketOptFunc) (Listener, error) {
 	wsConfig := websocketDefaultConfig()
 	for _, fn := range opts {
 		fn(&wsConfig)

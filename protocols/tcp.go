@@ -19,6 +19,7 @@ type TCPServer struct {
 	sessions               map[string]Session
 	sessionsMutex          sync.RWMutex
 	ctx                    context.Context
+	cancel                 context.CancelFunc
 	TCPConfig
 }
 
@@ -38,7 +39,8 @@ type TCPConfig struct {
 
 func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*TCPServer, error) {
 	addr := fmt.Sprintf("%v:%v", host, port)
-	return &TCPServer{addr: addr, ctx: ctx, TCPConfig: config}, nil
+	tcpContext, cancel := context.WithCancel(ctx)
+	return &TCPServer{addr: addr, ctx: tcpContext, cancel: cancel, TCPConfig: config}, nil
 }
 
 func (t *TCPServer) StartReceiveStream() error {
@@ -53,11 +55,10 @@ func (t *TCPServer) StartReceiveStream() error {
 }
 
 func (t *TCPServer) StopReceiveStream() error {
-	err := t.conn.Close()
-	if err != nil {
-		return err
+	for _, session := range t.sessions {
+		session.CloseSession()
 	}
-	t.ctx.Done()
+	t.cancel()
 	return nil
 }
 
@@ -65,6 +66,9 @@ func (t *TCPServer) receiveStream() {
 	for {
 		select {
 		case <-t.ctx.Done():
+			if err := t.conn.Close(); err != nil {
+				fmt.Printf("Error from connection: %v\n", err)
+			}
 			return
 		default:
 			sConn, err := t.conn.Accept() //Session connection
@@ -97,8 +101,6 @@ func (t *TCPServer) newSession(addr net.Addr, sConn net.Conn, ctx context.Contex
 		sConn:        sConn,
 	}
 	newSession.ctx, newSession.cancel = context.WithCancel(ctx)
-
-	fmt.Printf("New session created %v - Session ID: %v\n", addr.String(), newSession.SessionID)
 	t.sessionsMutex.Lock()
 	t.sessions[addr.String()] = &newSession
 	t.sessionsMutex.Unlock()
@@ -144,7 +146,6 @@ func (s *TCPSession) receiveBytes(data ...[]byte) {
 		default:
 			_, err := s.sConn.Read(buffer)
 			if err != nil {
-				//I REALLY NEED TO CREATE A LOGGER
 				fmt.Printf("Error while reading from connection: %s\n", err)
 				continue
 			}
@@ -158,6 +159,7 @@ func (s *TCPSession) Data() (DataFromClient chan []byte) {
 }
 
 func (s *TCPSession) CloseSession() {
+
 	defer s.cancel()
 	s.conn.Close()
 	close(s.DataChannel)
