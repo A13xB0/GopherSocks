@@ -1,11 +1,13 @@
 package listenerprotocols
 
 import (
+	"encoding/binary"
 	"fmt"
 	"golang.org/x/net/context"
 	"net"
 	"reflect"
 	"testing"
+	"time"
 )
 
 const (
@@ -17,7 +19,7 @@ func TestTCPListenerReceiveSingleMessage(t *testing.T) {
 	//Setup
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tListener, err := NewTCP(tcpHost, tcpPort, ctx, TCPConfig{})
+	tListener, err := NewTCP(tcpHost, tcpPort, ctx, TCPConfig{MaxLength: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +29,7 @@ func TestTCPListenerReceiveSingleMessage(t *testing.T) {
 	go func() {
 		errChan <- tListener.StartReceiveStream()
 	}()
+	time.Sleep(2 * time.Second)
 	if len(errChan) > 0 {
 		t.Fatal(<-errChan)
 	}
@@ -39,6 +42,10 @@ func TestTCPListenerReceiveSingleMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	length := uint32(len(want))
+	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
+		t.Fatal(err)
+	}
 	_, err = conn.Write(want)
 	if err != nil {
 		t.Fatal(err)

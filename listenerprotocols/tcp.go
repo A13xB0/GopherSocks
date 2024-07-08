@@ -1,8 +1,10 @@
 package listenerprotocols
 
 import (
+	"encoding/binary"
 	"fmt"
 	"golang.org/x/net/context"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -35,6 +37,7 @@ type TCPSession struct {
 }
 
 type TCPConfig struct {
+	MaxLength uint32
 }
 
 func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*TCPServer, error) {
@@ -126,28 +129,49 @@ func (t *TCPServer) GetSession(ClientAddr string) Session {
 }
 
 func (s *TCPSession) SendToClient(data []byte) error {
+	// Write the length of the data as a big endian uint32
+	length := uint32(len(data))
+	if err := binary.Write(s.sConn, binary.BigEndian, length); err != nil {
+		return err
+	}
+
+	// Write the data itself
 	if _, err := s.sConn.Write(data); err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func (s *TCPSession) receiveBytes(data ...[]byte) {
-	//todo: Will need to implement a delimeter at some point for any streaming functionality
-	//todo: Will need to implement read deadline
-	//todo: Will need to implement nil pointer checks for terminated connection
-	buffer := make([]byte, 10240)
 	for {
 		select {
 		case <-s.ctx.Done():
 			s.CloseSession()
 			return
 		default:
-			_, err := s.sConn.Read(buffer)
-			if err != nil {
-				fmt.Printf("Error while reading from connection: %s\n", err)
+			// Read the length of the data
+			var length uint32
+			if err := binary.Read(s.sConn, binary.BigEndian, &length); err != nil {
+				if err == io.EOF {
+					// Connection closed
+					return
+				}
+				fmt.Printf("Error while reading length from connection: %s\n", err)
 				continue
 			}
+
+			if length > s.MaxLength {
+				continue
+			}
+
+			// Read the data itself
+			buffer := make([]byte, length)
+			if _, err := io.ReadFull(s.sConn, buffer); err != nil {
+				fmt.Printf("Error while reading data from connection: %s\n", err)
+				continue
+			}
+
 			s.DataChannel <- buffer
 		}
 	}

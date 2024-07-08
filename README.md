@@ -2,9 +2,10 @@
 This is a Go Net Stream wrapper, a component I’ve found myself recreating for various projects that involve transmitting raw data over TCP, UDP, or Websockets. This module not only manages the transmission of data, but also oversees sessions and individual connections. It offers a user-friendly interface, simplifying the process of managing basic comms.
 
 **To do:**
+- [ ] line break delimiter for TCP (currently only supports length delimited)
 - [ ] Tests
 - [ ] Protocol Configuration
-- [ ] Add logger inteface
+- [ ] Add logger interface
 - [ ] client
 - [ ] Goroutine workgroups
 
