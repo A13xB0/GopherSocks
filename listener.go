@@ -3,7 +3,7 @@ package gophersocks
 
 import (
 	"context"
-	"github.com/A13xB0/GopherSocks/listenerprotocols"
+	"github.com/A13xB0/GopherSocks/listener"
 )
 
 // Listener defines the interface for streaming TCP and UDP connections
@@ -15,15 +15,15 @@ type Listener interface {
 	StopReceiveStream() error
 
 	// SetAnnounceNewSession Sets middlware for announcing a new session
-	SetAnnounceNewSession(function listenerprotocols.AnnounceMiddlewareFunc, options any)
+	SetAnnounceNewSession(function listener.AnnounceMiddlewareFunc, options any)
 
 	//Getters
 
 	// GetActiveSessions Get all sessions
-	GetActiveSessions() map[string]listenerprotocols.Session
+	GetActiveSessions() map[string]listener.Session
 
 	// GetSession Get session from ClientAddr (IP:Port)
-	GetSession(ClientAddr string) listenerprotocols.Session
+	GetSession(ClientAddr string) listener.Session
 }
 
 // NewTCPListener creates a new Stream handler for your chosen stream type
@@ -37,7 +37,7 @@ func NewTCPListenerWithContext(host string, port uint16, ctx context.Context, op
 	for _, fn := range opts {
 		fn(&tcpConfig)
 	}
-	return listenerprotocols.NewTCP(host, port, ctx, tcpConfig)
+	return listener.NewTCP(host, port, ctx, tcpConfig)
 }
 
 // NewUDPListener creates a new Stream handler for your chosen stream type
@@ -51,7 +51,7 @@ func NewUDPListenerWithContext(host string, port uint16, ctx context.Context, op
 	for _, fn := range opts {
 		fn(&udpConfig)
 	}
-	return listenerprotocols.NewUDP(host, port, ctx, udpConfig)
+	return listener.NewUDP(host, port, ctx, udpConfig)
 }
 
 // NewWebsocketsListener creates a new Stream handler for your chosen stream type
@@ -65,5 +65,5 @@ func NewWebsocketsListenerWithContext(host string, port uint16, ctx context.Cont
 	for _, fn := range opts {
 		fn(&wsConfig)
 	}
-	return listenerprotocols.NewWebSocket(host, port, ctx, wsConfig)
+	return listener.NewWebSocket(host, port, ctx, wsConfig)
 }

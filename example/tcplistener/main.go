@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	gophersocks "github.com/A13xB0/GopherSocks"
-	"github.com/A13xB0/GopherSocks/listenerprotocols"
+	"github.com/A13xB0/GopherSocks/listener"
 	"os"
 	"os/signal"
 	"syscall"
@@ -33,7 +33,7 @@ func main() {
 }
 
 // Do something with the active sessions, in this example I am going to start a goroutine for each session and just print and echo the data received
-func echo(session listenerprotocols.Session) {
+func echo(session listener.Session) {
 	for data := range session.Data() {
 		fmt.Println(data)
 		err := session.SendToClient(data)
@@ -44,7 +44,7 @@ func echo(session listenerprotocols.Session) {
 	}
 }
 
-func announceStreamHandler(options any, session listenerprotocols.Session) {
+func announceStreamHandler(options any, session listener.Session) {
 	fmt.Printf("New session created %v - Session ID: %v\n", session.GetClientAddr(), session.GetSessionID())
 	go echo(session)
 }

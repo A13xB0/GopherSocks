@@ -1,4 +1,4 @@
-package listenerprotocols
+package listener
 
 import (
 	"context"

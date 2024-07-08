@@ -1,32 +1,35 @@
-package listenerprotocols
+package listener
 
 import (
+	"encoding/binary"
 	"fmt"
 	"golang.org/x/net/context"
 	"net"
 	"reflect"
 	"testing"
+	"time"
 )
 
 const (
-	udpHost = "127.0.0.1"
-	udpPort = 9001
+	tcpHost = "127.0.0.1"
+	tcpPort = 9000
 )
 
-func TestUDPListenerReceiveSingleMessage(t *testing.T) {
+func TestTCPListenerReceiveSingleMessage(t *testing.T) {
 	//Setup
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tListener, err := NewUDP(udpHost, udpPort, ctx, UDPConfig{})
+	tListener, err := NewTCP(tcpHost, tcpPort, ctx, TCPConfig{MaxLength: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
 	newSessionChan := make(chan Session)
-	tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
+	tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
 	errChan := make(chan error)
 	go func() {
 		errChan <- tListener.StartReceiveStream()
 	}()
+	time.Sleep(2 * time.Second)
 	if len(errChan) > 0 {
 		t.Fatal(<-errChan)
 	}
@@ -34,11 +37,15 @@ func TestUDPListenerReceiveSingleMessage(t *testing.T) {
 	var want []byte = []byte("Hello World!")
 	var got []byte
 	//Send Packet
-	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort))
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	length := uint32(len(want))
+	if err := binary.Write(conn, binary.BigEndian, length); err != nil {
+		t.Fatal(err)
+	}
 	_, err = conn.Write(want)
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +59,6 @@ func TestUDPListenerReceiveSingleMessage(t *testing.T) {
 	}
 }
 
-func utilityGetSessionUDP(options any, session Session) {
+func utilityGetSessionTCP(options any, session Session) {
 	options.(chan Session) <- session
 }

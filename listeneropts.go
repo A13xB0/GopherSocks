@@ -1,49 +1,49 @@
 package gophersocks
 
 import (
-	"github.com/A13xB0/GopherSocks/listenerprotocols"
+	"github.com/A13xB0/GopherSocks/listener"
 )
 
 // TCP
-type TCPOptFunc func(config *listenerprotocols.TCPConfig)
+type TCPOptFunc func(config *listener.TCPConfig)
 
-func tcpDefaultConfig() listenerprotocols.TCPConfig {
-	return listenerprotocols.TCPConfig{
+func tcpDefaultConfig() listener.TCPConfig {
+	return listener.TCPConfig{
 		MaxLength: 1024,
 	}
 }
 
 func WithTCPPacketMaxLength(length uint32) TCPOptFunc {
-	return func(config *listenerprotocols.TCPConfig) {
+	return func(config *listener.TCPConfig) {
 		config.MaxLength = length
 	}
 }
 
 // UDP
-type UDPOptFunc func(config *listenerprotocols.UDPConfig)
+type UDPOptFunc func(config *listener.UDPConfig)
 
-func udpDefaultConfig() listenerprotocols.UDPConfig {
-	return listenerprotocols.UDPConfig{}
+func udpDefaultConfig() listener.UDPConfig {
+	return listener.UDPConfig{}
 }
 
 // Websockets
-type WebsocketOptFunc func(config *listenerprotocols.WebsocketsConfig)
+type WebsocketOptFunc func(config *listener.WebsocketsConfig)
 
-func websocketDefaultConfig() listenerprotocols.WebsocketsConfig {
-	return listenerprotocols.WebsocketsConfig{
+func websocketDefaultConfig() listener.WebsocketsConfig {
+	return listener.WebsocketsConfig{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 	}
 }
 
 func WithWebsocketReadBufferSize(buffer int) WebsocketOptFunc {
-	return func(config *listenerprotocols.WebsocketsConfig) {
+	return func(config *listener.WebsocketsConfig) {
 		config.ReadBufferSize = buffer
 	}
 }
 
 func WithWebsocketWriteBufferSize(buffer int) WebsocketOptFunc {
-	return func(config *listenerprotocols.WebsocketsConfig) {
+	return func(config *listener.WebsocketsConfig) {
 		config.WriteBufferSize = buffer
 	}
 }
