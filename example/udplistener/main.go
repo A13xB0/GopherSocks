@@ -27,7 +27,7 @@ func main() {
 
 	//Start Listening
 	fmt.Printf("Starting listener on %s:%d\n", host, port)
-	if err := uListener.StartReceiveStream(); err != nil {
+	if err := uListener.StartListener(); err != nil {
 		panic(err)
 	}
 }
@@ -52,7 +52,7 @@ func announceStreamHandler(options any, session listener.Session) {
 func stop(listener gophersocks.Listener, sigs chan os.Signal) {
 	sig := <-sigs
 	fmt.Println("Got signal:", sig)
-	err := listener.StopReceiveStream()
+	err := listener.StopListener()
 	if err != nil {
 		return
 	}

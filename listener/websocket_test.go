@@ -30,7 +30,7 @@ func TestWSListenerReceiveSingleMessage(t *testing.T) {
 	tListener.SetAnnounceNewSession(utilityGetSessionWS, newSessionChan)
 	errChan := make(chan error)
 	go func() {
-		errChan <- tListener.StartReceiveStream()
+		errChan <- tListener.StartListener()
 	}()
 	time.Sleep(1 * time.Second)
 	if len(errChan) > 0 {

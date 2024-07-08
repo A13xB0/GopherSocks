@@ -55,7 +55,7 @@ func NewWebSocket(host string, port uint16, ctx context.Context, config Websocke
 	}, nil
 }
 
-func (w *WebSocketServer) StartReceiveStream() error {
+func (w *WebSocketServer) StartListener() error {
 	w.httpServer = &http.Server{
 		Addr:    w.addr,
 		Handler: http.HandlerFunc(w.handleConnections),
@@ -74,7 +74,7 @@ func (w *WebSocketServer) StartReceiveStream() error {
 	}
 }
 
-func (w *WebSocketServer) StopReceiveStream() error {
+func (w *WebSocketServer) StopListener() error {
 	defer w.cancel()
 	for _, session := range w.sessions {
 		session.CloseSession()

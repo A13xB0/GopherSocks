@@ -46,7 +46,7 @@ func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*T
 	return &TCPServer{addr: addr, ctx: tcpContext, cancel: cancel, TCPConfig: config, sessions: make(map[string]Session)}, nil
 }
 
-func (t *TCPServer) StartReceiveStream() error {
+func (t *TCPServer) StartListener() error {
 	//Start listening for connections
 	conn, err := net.Listen("tcp", t.addr)
 	if err != nil {
@@ -57,7 +57,7 @@ func (t *TCPServer) StartReceiveStream() error {
 	return nil
 }
 
-func (t *TCPServer) StopReceiveStream() error {
+func (t *TCPServer) StopListener() error {
 	for _, session := range t.sessions {
 		session.CloseSession()
 	}

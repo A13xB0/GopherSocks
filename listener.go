@@ -9,10 +9,10 @@ import (
 // Listener defines the interface for streaming TCP and UDP connections
 type Listener interface {
 	// StartReceiveStream Starts listener for stream transport
-	StartReceiveStream() error
+	StartListener() error
 
 	// StopReceiveStream Stops listener for stream transport
-	StopReceiveStream() error
+	StopListener() error
 
 	// SetAnnounceNewSession Sets middlware for announcing a new session
 	SetAnnounceNewSession(function listener.AnnounceMiddlewareFunc, options any)

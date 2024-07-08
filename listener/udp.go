@@ -43,7 +43,7 @@ func NewUDP(host string, port uint16, ctx context.Context, config UDPConfig) (*U
 }
 
 // Start Go Routine to listen for UDP packets
-func (u *UDPServer) StartReceiveStream() error {
+func (u *UDPServer) StartListener() error {
 	//Announce listening port and open
 	conn, err := net.ListenPacket("udp", u.addr)
 	if err != nil {
@@ -61,7 +61,7 @@ func (u *UDPServer) StartReceiveStream() error {
 }
 
 // Stops Receiving stream
-func (u *UDPServer) StopReceiveStream() error {
+func (u *UDPServer) StopListener() error {
 	for _, session := range u.sessions {
 		session.CloseSession()
 	}

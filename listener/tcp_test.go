@@ -27,7 +27,7 @@ func TestTCPListenerReceiveSingleMessage(t *testing.T) {
 	tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
 	errChan := make(chan error)
 	go func() {
-		errChan <- tListener.StartReceiveStream()
+		errChan <- tListener.StartListener()
 	}()
 	time.Sleep(2 * time.Second)
 	if len(errChan) > 0 {

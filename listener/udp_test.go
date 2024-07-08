@@ -25,7 +25,7 @@ func TestUDPListenerReceiveSingleMessage(t *testing.T) {
 	tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
 	errChan := make(chan error)
 	go func() {
-		errChan <- tListener.StartReceiveStream()
+		errChan <- tListener.StartListener()
 	}()
 	if len(errChan) > 0 {
 		t.Fatal(<-errChan)
