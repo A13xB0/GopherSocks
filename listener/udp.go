@@ -92,11 +92,11 @@ func (u *UDPServer) receiveStream() {
 			var ok bool
 			//If session does not exist create new one
 			u.sessionsMutex.RLock()
-			if session, ok = u.sessions[clientAddrStr]; !ok {
-				u.sessionsMutex.RUnlock()
+			session, ok = u.sessions[clientAddrStr]
+			u.sessionsMutex.RUnlock()
+			if !ok {
 				session = u.newSession(addr, buffer[:n])
 			} else {
-				u.sessionsMutex.RUnlock()
 				session.receiveBytes(buffer[:n])
 			}
 		}
