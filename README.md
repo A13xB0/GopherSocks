@@ -1,35 +1,50 @@
 # GopherSocks
 
-GopherSocks is a robust, feature-rich networking library for Go that provides high-performance TCP, UDP, and WebSocket servers with enhanced session management capabilities.
+GopherSocks is a high-performance networking library for Go that provides TCP, UDP, and WebSocket servers with advanced session management capabilities. It's designed for building robust network applications with support for multiple protocols and efficient connection handling.
 
 ## Features
 
-- **Multiple Protocol Support**
-  - TCP with length-prefixed messages
-  - UDP with automatic session management
-  - WebSocket with binary message support
+### Protocol Support
+- **TCP Server**
+  - Length-prefixed message framing
+  - Automatic message validation
+  - Configurable buffer sizes
+  - Built-in connection management
 
-- **Advanced Session Management**
-  - Unique session IDs
-  - Last received time tracking
-  - Automatic session cleanup
-  - Session announcement middleware
+- **UDP Server**
+  - Automatic session management
+  - Datagram validation
+  - Session timeout handling
+  - Support for multiple concurrent sessions
 
-- **Configurable Options**
-  - Maximum message length
-  - Buffer sizes
-  - Read/Write timeouts
-  - Maximum concurrent connections
+- **WebSocket Server**
+  - Binary message support
+  - Custom endpoint paths
+  - Configurable buffer sizes
+  - Automatic connection upgrade
 
-- **Error Handling**
-  - Protocol-specific error types
-  - Detailed error messages
-  - Error cause tracking
+### Session Management
+- Unique session IDs using UUID v4
+- Last received time tracking
+- Automatic session cleanup
+- Session announcement middleware
+- Context-based cancellation
+- Clean shutdown handling
 
-- **Logging**
-  - Configurable logging interface
-  - Debug, Info, Warning, and Error levels
-  - Default logger included
+### Configuration
+- Maximum message length limits
+- Configurable buffer sizes
+- Read/Write timeouts
+- Maximum concurrent connections
+- Custom logger support
+- Protocol-specific options
+
+### Error Handling
+- Protocol-specific error types
+- Detailed error messages
+- Error cause tracking
+- Connection error recovery
+- Validation error handling
 
 ## Installation
 
@@ -37,7 +52,7 @@ GopherSocks is a robust, feature-rich networking library for Go that provides hi
 go get github.com/A13xB0/GopherSocks
 ```
 
-## Quick Start
+## Usage Examples
 
 ### TCP Server
 
@@ -49,63 +64,54 @@ import (
     "os"
     "os/signal"
     "syscall"
-    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
 
 func main() {
-    // Create TCP listener with custom configuration
-    tcpListener, err := gophersocks.NewTCPListener(
+    // Create TCP server
+    server, err := gophersocks.NewTCPListener(
         "0.0.0.0",
         8001,
         gophersocks.WithMaxLength(1024*1024), // 1MB max message size
         gophersocks.WithBufferSize(100),      // Channel buffer size
-        gophersocks.WithTimeouts(30, 30),     // 30 second read/write timeouts
-        gophersocks.WithMaxConnections(1000), // Maximum concurrent connections
+        gophersocks.WithTimeouts(30, 30),     // 30 second timeouts
+        gophersocks.WithMaxConnections(1000), // Max connections
     )
     if err != nil {
-        fmt.Printf("Failed to create TCP listener: %v\n", err)
+        fmt.Printf("Failed to create server: %v\n", err)
         os.Exit(1)
     }
 
-    // Setup signal handler for graceful shutdown
-    sigs := make(chan os.Signal, 1)
-    signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-    // Set up session handler
-    tcpListener.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
-        fmt.Printf("New TCP connection from %v - Session ID: %v\n",
-            session.GetClientAddr(),
-            session.GetSessionID(),
-        )
-
+    // Handle new sessions
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New connection from %v\n", session.GetClientAddr())
+        
         // Handle session data
         go func() {
             for data := range session.Data() {
-                fmt.Printf("Received data from session %s: %s\n",
-                    session.GetSessionID(),
-                    string(data),
-                )
-
-                // Echo the data back
+                // Echo data back
                 if err := session.SendToClient(data); err != nil {
-                    fmt.Printf("Failed to send data: %v\n", err)
+                    fmt.Printf("Send error: %v\n", err)
                     return
                 }
             }
         }()
     }, nil)
 
-    // Start listening
-    if err := tcpListener.StartListener(); err != nil {
-        fmt.Printf("Failed to start listener: %v\n", err)
+    // Start server
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
         os.Exit(1)
     }
 
-    // Wait for shutdown signal
-    <-sigs
-    tcpListener.StopListener()
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
 }
 ```
 
@@ -125,57 +131,54 @@ import (
 )
 
 func main() {
-    // Create UDP server with custom configuration
-    udpListener, err := gophersocks.NewUDPListener(
+    // Create UDP server
+    server, err := gophersocks.NewUDPListener(
         "0.0.0.0",
         8002,
-        gophersocks.WithMaxLength(1024),      // 1KB max message size
-        gophersocks.WithBufferSize(100),      // Channel buffer size
-        gophersocks.WithTimeouts(30, 30),     // 30 second read/write timeouts
-        gophersocks.WithMaxConnections(1000), // Maximum concurrent sessions
+        gophersocks.WithMaxLength(65507),     // Max UDP datagram
+        gophersocks.WithBufferSize(1000),     // Larger buffer for UDP
+        gophersocks.WithTimeouts(60, 60),     // 60 second timeouts
+        gophersocks.WithMaxConnections(1000), // Max sessions
     )
     if err != nil {
-        fmt.Printf("Failed to create UDP listener: %v\n", err)
+        fmt.Printf("Failed to create server: %v\n", err)
         os.Exit(1)
     }
 
-    // Setup signal handler
-    sigs := make(chan os.Signal, 1)
-    signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-    // Set up session handler
-    udpListener.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
-        fmt.Printf("New UDP session from %v - Session ID: %v\n",
-            session.GetClientAddr(),
-            session.GetSessionID(),
-        )
-
-        // Handle session data
+    // Handle new sessions
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New session from %v\n", session.GetClientAddr())
+        
         go func() {
             for data := range session.Data() {
-                fmt.Printf("Received data from session %s: %s\n",
-                    session.GetSessionID(),
-                    string(data),
-                )
+                // Check session timeout
+                if time.Since(session.GetLastRecieved()) > time.Minute {
+                    session.CloseSession()
+                    return
+                }
 
-                // Echo the data back
+                // Echo datagram
                 if err := session.SendToClient(data); err != nil {
-                    fmt.Printf("Failed to send data: %v\n", err)
+                    fmt.Printf("Send error: %v\n", err)
                     return
                 }
             }
         }()
     }, nil)
 
-    // Start listening
-    if err := udpListener.StartListener(); err != nil {
-        fmt.Printf("Failed to start listener: %v\n", err)
+    // Start server
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
         os.Exit(1)
     }
 
-    // Wait for shutdown signal
-    <-sigs
-    udpListener.StopListener()
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
 }
 ```
 
@@ -189,94 +192,115 @@ import (
     "os"
     "os/signal"
     "syscall"
-    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
 
 func main() {
-    // Create WebSocket server with custom configuration
-    wsListener, err := gophersocks.NewWebSocketListener(
+    // Create WebSocket server
+    server, err := gophersocks.NewWebSocketListener(
         "0.0.0.0",
         8003,
-        gophersocks.WithMaxLength(1024*1024),    // 1MB max message size
-        gophersocks.WithBufferSize(100),         // Channel buffer size
-        gophersocks.WithTimeouts(30, 30),        // 30 second read/write timeouts
-        gophersocks.WithMaxConnections(1000),    // Maximum concurrent connections
+        gophersocks.WithMaxLength(1024*1024),    // 1MB max message
+        gophersocks.WithBufferSize(100),         // Buffer size
+        gophersocks.WithTimeouts(30, 30),        // 30 second timeouts
         gophersocks.WithWebSocketBufferSizes(1024, 1024),
         gophersocks.WithWebSocketPath("/ws"),
     )
     if err != nil {
-        fmt.Printf("Failed to create WebSocket listener: %v\n", err)
+        fmt.Printf("Failed to create server: %v\n", err)
         os.Exit(1)
     }
 
-    // Setup signal handler
-    sigs := make(chan os.Signal, 1)
-    signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-    // Set up session handler
-    wsListener.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
-        fmt.Printf("New WebSocket connection from %v - Session ID: %v\n",
-            session.GetClientAddr(),
-            session.GetSessionID(),
-        )
-
-        // Handle session data
+    // Handle new connections
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New connection from %v\n", session.GetClientAddr())
+        
         go func() {
             for data := range session.Data() {
-                fmt.Printf("Received data from session %s: %s\n",
-                    session.GetSessionID(),
-                    string(data),
-                )
-
-                // Echo the data back
+                // Echo message
                 if err := session.SendToClient(data); err != nil {
-                    fmt.Printf("Failed to send data: %v\n", err)
+                    fmt.Printf("Send error: %v\n", err)
                     return
                 }
             }
         }()
     }, nil)
 
-    // Start listening
-    if err := wsListener.StartListener(); err != nil {
-        fmt.Printf("Failed to start listener: %v\n", err)
+    // Start server
+    fmt.Printf("WebSocket server listening on ws://0.0.0.0:8003/ws\n")
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
         os.Exit(1)
     }
 
-    // Wait for shutdown signal
-    <-sigs
-    wsListener.StopListener()
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
 }
 ```
 
 ## Configuration Options
 
 ### Common Options
-- `WithMaxLength(length uint32)`: Set maximum message length
-- `WithBufferSize(size int)`: Set channel buffer size
-- `WithTimeouts(read, write time.Duration)`: Set read/write timeouts
-- `WithMaxConnections(max int)`: Set maximum concurrent connections
-- `WithLogger(logger Logger)`: Set custom logger implementation
+```go
+// Set maximum message length
+WithMaxLength(length uint32)
 
-### WebSocket-Specific Options
-- `WithWebSocketBufferSizes(readSize, writeSize int)`: Set WebSocket buffer sizes
-- `WithWebSocketPath(path string)`: Set WebSocket endpoint path
+// Set channel buffer size
+WithBufferSize(size int)
 
-## Session Management
+// Set read/write timeouts in seconds
+WithTimeouts(read, write time.Duration)
 
-Each connection is managed as a session with:
-- Unique ID
-- Client address
-- Data channel for receiving messages
-- Last received time tracking
-- Context for cancellation
-- Clean shutdown handling
+// Set maximum concurrent connections
+WithMaxConnections(max int)
 
-## Error Handling
+// Set custom logger
+WithLogger(logger Logger)
+```
 
-The library provides specific error types:
+### WebSocket Options
+```go
+// Set WebSocket buffer sizes
+WithWebSocketBufferSizes(readSize, writeSize int)
+
+// Set WebSocket endpoint path
+WithWebSocketPath(path string)
+```
+
+## Session Interface
+
+The Session interface provides methods for handling network connections:
+
+```go
+type Session interface {
+    // Get unique session ID
+    GetSessionID() string
+    
+    // Get client's network address
+    GetClientAddr() net.Addr
+    
+    // Get last received time
+    GetLastRecieved() time.Time
+    
+    // Get data channel for receiving messages
+    Data() chan []byte
+    
+    // Send data to client
+    SendToClient(data []byte) error
+    
+    // Close the session
+    CloseSession()
+}
+```
+
+## Error Types
+
 - `ConnectionError`: Network connection issues
 - `ConfigError`: Configuration validation errors
 - `ProtocolError`: Protocol-specific errors
@@ -285,14 +309,23 @@ The library provides specific error types:
 ## Examples
 
 See the `example/` directory for complete working examples:
-- `example/tcplistener/`: TCP server example
-- `example/udplistener/`: UDP server example
-- `example/wslistener/`: WebSocket server example
+- `example/tcplistener/`: TCP echo server
+- `example/udplistener/`: UDP echo server with session timeout
+- `example/wslistener/`: WebSocket echo server
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+This project is more for me than for you, so I will not be providing support. 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright (C) 2025 Alex Bolton
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
