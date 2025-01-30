@@ -17,13 +17,14 @@ const (
 
 func TestUDPListener(t *testing.T) {
 	t.Run("Basic message exchange", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		// Create server with custom configuration
 		tListener, err := NewUDP(udpHost, udpPort, ctx,
 			WithMaxLength(1024),
 			WithBufferSize(100),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -34,14 +35,23 @@ func TestUDPListener(t *testing.T) {
 		tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
 
 		// Start server
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		// Connect client
 		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort))
@@ -57,13 +67,19 @@ func TestUDPListener(t *testing.T) {
 		}
 
 		// Get session and verify received message
-		session := <-newSessionChan
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
 		select {
 		case got := <-session.Data():
 			if !reflect.DeepEqual(want, got) {
 				t.Fatalf("want: %s, got: %s", want, got)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(100 * time.Millisecond):
 			t.Fatal("timeout waiting for message")
 		}
 
@@ -79,12 +95,13 @@ func TestUDPListener(t *testing.T) {
 	})
 
 	t.Run("Max message length", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		maxLength := uint32(10) // Very small max length for testing
 		tListener, err := NewUDP(udpHost, udpPort+1, ctx,
 			WithMaxLength(maxLength),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -93,14 +110,24 @@ func TestUDPListener(t *testing.T) {
 		newSessionChan := make(chan Session)
 		tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
 
+		// Start server
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort+1))
 		if err != nil {
@@ -115,11 +142,17 @@ func TestUDPListener(t *testing.T) {
 		}
 
 		// Message should be dropped, channel should be empty
-		session := <-newSessionChan
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
 		select {
 		case <-session.Data():
 			t.Fatal("received message larger than max length")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 			// Expected timeout
 		}
 
@@ -129,11 +162,11 @@ func TestUDPListener(t *testing.T) {
 	})
 
 	t.Run("Session timeout", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		tListener, err := NewUDP(udpHost, udpPort+2, ctx,
-			WithTimeouts(1, 1), // 1 second timeouts
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -142,20 +175,31 @@ func TestUDPListener(t *testing.T) {
 		newSessionChan := make(chan Session)
 		tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
 
+		// Start server
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		// Create a session
 		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort+2))
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer conn.Close()
 
 		// Send initial message
 		if _, err := conn.Write([]byte("hello")); err != nil {
@@ -163,28 +207,40 @@ func TestUDPListener(t *testing.T) {
 		}
 
 		// Get session
-		session := <-newSessionChan
-		<-session.Data() // Read initial message
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
+		// Read initial message
+		select {
+		case <-session.Data():
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for message")
+		}
 
 		// Wait for session timeout
-		time.Sleep(time.Second * 2)
+		time.Sleep(200 * time.Millisecond)
 
 		// Verify session was cleaned up
 		if len(tListener.GetActiveSessions()) != 0 {
 			t.Fatal("session not cleaned up after timeout")
 		}
 
-		conn.Close()
 		if err := tListener.StopListener(); err != nil {
 			t.Fatal("stop:", err)
 		}
 	})
 
 	t.Run("Multiple sessions", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		tListener, err := NewUDP(udpHost, udpPort+3, ctx)
+		tListener, err := NewUDP(udpHost, udpPort+3, ctx,
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,14 +248,24 @@ func TestUDPListener(t *testing.T) {
 		newSessionChan := make(chan Session)
 		tListener.SetAnnounceNewSession(utilityGetSessionUDP, newSessionChan)
 
+		// Start server
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		// Create multiple clients
 		numClients := 3
@@ -219,8 +285,19 @@ func TestUDPListener(t *testing.T) {
 			}
 
 			// Wait for session
-			session := <-newSessionChan
-			<-session.Data() // Read initial message
+			var session Session
+			select {
+			case session = <-newSessionChan:
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("timeout waiting for session")
+			}
+
+			// Read initial message
+			select {
+			case <-session.Data():
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("timeout waiting for message")
+			}
 		}
 
 		// Verify all sessions are active

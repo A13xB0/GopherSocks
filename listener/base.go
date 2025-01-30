@@ -117,6 +117,11 @@ func defaultConfig() *ServerConfig {
 		WriteTimeout:   time.Second * 30,
 		Logger:         &DefaultLogger{},
 		MaxConnections: 1000,
+		ProtocolConfig: &WebSocketConfig{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			Path:            "/ws",
+		},
 	}
 }
 
@@ -153,5 +158,24 @@ func WithTimeouts(read, write time.Duration) ServerOption {
 func WithMaxConnections(max int) ServerOption {
 	return func(c *ServerConfig) {
 		c.MaxConnections = max
+	}
+}
+
+// WithWebSocketBufferSizes sets the WebSocket read and write buffer sizes
+func WithWebSocketBufferSizes(readSize, writeSize int) ServerOption {
+	return func(config *ServerConfig) {
+		if wsConfig, ok := config.ProtocolConfig.(*WebSocketConfig); ok {
+			wsConfig.ReadBufferSize = readSize
+			wsConfig.WriteBufferSize = writeSize
+		}
+	}
+}
+
+// WithWebSocketPath sets the WebSocket endpoint path
+func WithWebSocketPath(path string) ServerOption {
+	return func(config *ServerConfig) {
+		if wsConfig, ok := config.ProtocolConfig.(*WebSocketConfig); ok {
+			wsConfig.Path = path
+		}
 	}
 }

@@ -13,12 +13,12 @@ import (
 
 const (
 	wsHost = "127.0.0.1"
-	wsPort = 9002
+	wsPort = 9100 // Use a different port range than TCP/UDP
 )
 
 func TestWSListener(t *testing.T) {
 	t.Run("Basic message exchange", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		// Create server with custom configuration
@@ -36,7 +36,9 @@ func TestWSListener(t *testing.T) {
 		tListener, err := NewWebSocket(wsHost, wsPort, ctx,
 			WithMaxLength(config.MaxLength),
 			WithBufferSize(config.BufferSize),
-			WithTimeouts(time.Second, time.Second),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+			WithWebSocketBufferSizes(wsConfig.ReadBufferSize, wsConfig.WriteBufferSize),
+			WithWebSocketPath(wsConfig.Path),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -47,14 +49,23 @@ func TestWSListener(t *testing.T) {
 		tListener.SetAnnounceNewSession(utilityGetSessionWS, newSessionChan)
 
 		// Start server
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		// Connect client
 		u := url.URL{
@@ -75,13 +86,19 @@ func TestWSListener(t *testing.T) {
 		}
 
 		// Get session and verify received message
-		session := <-newSessionChan
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
 		select {
 		case got := <-session.Data():
 			if !reflect.DeepEqual(want, got) {
 				t.Fatalf("want: %s, got: %s", want, got)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(100 * time.Millisecond):
 			t.Fatal("timeout waiting for message")
 		}
 
@@ -106,7 +123,7 @@ func TestWSListener(t *testing.T) {
 
 		// Test session cleanup
 		c.Close()
-		time.Sleep(100 * time.Millisecond) // Give server time to clean up
+		time.Sleep(50 * time.Millisecond) // Give server time to clean up
 		if len(tListener.GetActiveSessions()) != 0 {
 			t.Fatal("expected 0 active sessions after close")
 		}
@@ -118,13 +135,21 @@ func TestWSListener(t *testing.T) {
 	})
 
 	t.Run("Max message length", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		maxLength := uint32(10) // Very small max length for testing
-		tListener, err := NewWebSocket(wsHost, wsPort+1, ctx,
+		wsConfig := &WebSocketConfig{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			Path:            "/ws",
+		}
+
+		tListener, err := NewWebSocket(wsHost, wsPort+10, ctx,
 			WithMaxLength(maxLength),
-			WithTimeouts(time.Second, time.Second),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+			WithWebSocketBufferSizes(wsConfig.ReadBufferSize, wsConfig.WriteBufferSize),
+			WithWebSocketPath(wsConfig.Path),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -133,19 +158,28 @@ func TestWSListener(t *testing.T) {
 		newSessionChan := make(chan Session)
 		tListener.SetAnnounceNewSession(utilityGetSessionWS, newSessionChan)
 
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		u := url.URL{
 			Scheme: "ws",
-			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+1),
-			Path:   "/ws",
+			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+10),
+			Path:   wsConfig.Path,
 		}
 		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 		if err != nil {
@@ -160,12 +194,24 @@ func TestWSListener(t *testing.T) {
 		}
 
 		// Message should be dropped, channel should be empty
-		session := <-newSessionChan
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
 		select {
 		case <-session.Data():
 			t.Fatal("received message larger than max length")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(50 * time.Millisecond):
 			// Expected timeout
+		}
+
+		// Connection should be closed by server
+		time.Sleep(50 * time.Millisecond)
+		if err := c.WriteMessage(websocket.BinaryMessage, []byte("test")); err == nil {
+			t.Fatal("expected connection to be closed")
 		}
 
 		if err := tListener.StopListener(); err != nil {
@@ -174,13 +220,21 @@ func TestWSListener(t *testing.T) {
 	})
 
 	t.Run("Max connections", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		maxConns := 2
-		tListener, err := NewWebSocket(wsHost, wsPort+2, ctx,
+		wsConfig := &WebSocketConfig{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			Path:            "/ws",
+		}
+
+		tListener, err := NewWebSocket(wsHost, wsPort+20, ctx,
 			WithMaxConnections(maxConns),
-			WithTimeouts(time.Second, time.Second),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+			WithWebSocketBufferSizes(wsConfig.ReadBufferSize, wsConfig.WriteBufferSize),
+			WithWebSocketPath(wsConfig.Path),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -189,22 +243,31 @@ func TestWSListener(t *testing.T) {
 		newSessionChan := make(chan Session)
 		tListener.SetAnnounceNewSession(utilityGetSessionWS, newSessionChan)
 
+		serverErrChan := make(chan error, 1)
 		go func() {
 			if err := tListener.StartListener(); err != nil {
-				t.Errorf("StartListener error: %v", err)
+				serverErrChan <- err
 			}
 		}()
 
 		// Wait for server to start
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
 
 		// Create maxConns connections
 		conns := make([]*websocket.Conn, maxConns)
 		for i := 0; i < maxConns; i++ {
 			u := url.URL{
 				Scheme: "ws",
-				Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+2),
-				Path:   "/ws",
+				Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+20),
+				Path:   wsConfig.Path,
 			}
 			c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 			if err != nil {
@@ -212,14 +275,20 @@ func TestWSListener(t *testing.T) {
 			}
 			defer c.Close()
 			conns[i] = c
-			<-newSessionChan // Wait for session announcement
+
+			// Wait for session announcement
+			select {
+			case <-newSessionChan:
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("timeout waiting for session")
+			}
 		}
 
 		// Try to create one more connection
 		u := url.URL{
 			Scheme: "ws",
-			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+2),
-			Path:   "/ws",
+			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+20),
+			Path:   wsConfig.Path,
 		}
 		_, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
 		if err == nil {

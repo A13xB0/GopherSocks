@@ -2,6 +2,7 @@ package listener
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -47,11 +48,7 @@ func NewWebSocket(host string, port uint16, ctx context.Context, opts ...ServerO
 	// Get WebSocket-specific configuration
 	wsConfig, ok := config.ProtocolConfig.(*WebSocketConfig)
 	if !ok {
-		wsConfig = &WebSocketConfig{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-			Path:            "/ws",
-		}
+		return nil, NewConfigError("invalid WebSocket configuration", nil)
 	}
 
 	addr := fmt.Sprintf("%v:%v", host, port)
@@ -65,6 +62,7 @@ func NewWebSocket(host string, port uint16, ctx context.Context, opts ...ServerO
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  wsConfig.ReadBufferSize,
 			WriteBufferSize: wsConfig.WriteBufferSize,
+			CheckOrigin:     func(r *http.Request) bool { return true }, // Allow all origins
 		},
 	}
 
@@ -85,11 +83,22 @@ func (w *WebSocketServer) StartListener() error {
 	w.Logger.Info("WebSocket server listening on %s%s", w.addr, wsConfig.Path)
 
 	// Start server in a goroutine
+	errChan := make(chan error, 1)
 	go func() {
 		if err := w.httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			w.Logger.Error("HTTP server error: %v", err)
+			errChan <- err
 		}
 	}()
+
+	// Wait for server to start
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-errChan:
+		return err
+	default:
+		// Server started successfully
+	}
 
 	return nil
 }
@@ -104,7 +113,12 @@ func (w *WebSocketServer) StopListener() error {
 	// Close all active sessions
 	w.sessionsMutex.Lock()
 	for _, session := range w.sessions {
-		session.CloseSession()
+		s := session.(*WebSocketSession)
+		s.Cancel() // Cancel context from base session
+		s.ClientConn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(100*time.Millisecond))
+		s.ClientConn.Close()
+		close(s.DataChannel)
+		delete(w.sessions, s.GetClientAddr().String())
 	}
 	w.sessionsMutex.Unlock()
 
@@ -130,14 +144,15 @@ func (w *WebSocketServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc,
 // handleConnections processes incoming WebSocket connections
 func (w *WebSocketServer) handleConnections(rw http.ResponseWriter, req *http.Request) {
 	// Check max connections before upgrading
-	w.sessionsMutex.RLock()
+	w.sessionsMutex.Lock()
 	if len(w.sessions) >= w.MaxConnections {
-		w.sessionsMutex.RUnlock()
+		w.sessionsMutex.Unlock()
 		w.Logger.Warn("Max connections reached, rejecting connection from %s", req.RemoteAddr)
 		http.Error(rw, "Too many connections", http.StatusServiceUnavailable)
+		w.cancel() // Stop accepting new connections
 		return
 	}
-	w.sessionsMutex.RUnlock()
+	w.sessionsMutex.Unlock()
 
 	// Upgrade connection to WebSocket
 	conn, err := w.upgrader.Upgrade(rw, req, nil)
@@ -152,7 +167,7 @@ func (w *WebSocketServer) handleConnections(rw http.ResponseWriter, req *http.Re
 
 // newSession creates a new WebSocket session
 func (w *WebSocketServer) newSession(conn *websocket.Conn) *WebSocketSession {
-	base := NewBaseSession(conn.RemoteAddr(), context.Background(), w.Logger)
+	base := NewBaseSession(conn.RemoteAddr(), w.ctx, w.Logger) // Use server context
 	base.ID = uuid.NewString()
 
 	session := &WebSocketSession{
@@ -176,33 +191,65 @@ func (w *WebSocketServer) newSession(conn *websocket.Conn) *WebSocketSession {
 func (w *WebSocketServer) handleSession(session *WebSocketSession) {
 	w.wg.Add(1)
 	defer w.wg.Done()
-	defer session.CloseSession()
+	defer w.closeSession(session)
 
-	readChan := make(chan []byte)
-	errChan := make(chan error)
+	readChan := make(chan []byte, w.BufferSize)
+	errChan := make(chan error, 1)
 
 	// Read messages in a separate goroutine
 	go func() {
+		defer close(readChan)
+		defer close(errChan)
+
 		for {
 			select {
 			case <-w.ctx.Done():
 				return
 			default:
 				// Set read deadline to allow context cancellation
-				session.ClientConn.SetReadDeadline(time.Now().Add(time.Second))
+				session.ClientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 				messageType, message, err := session.ClientConn.ReadMessage()
 				if err != nil {
 					if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 						return // Normal closure
 					}
-					errChan <- err
+					if ne, ok := err.(net.Error); ok && ne.Timeout() {
+						continue // Deadline exceeded, try again
+					}
+					if ne, ok := err.(net.Error); ok && ne.Temporary() {
+						w.Logger.Warn("Temporary error reading message: %v", err)
+						time.Sleep(100 * time.Millisecond) // Basic retry backoff
+						continue
+					}
+					select {
+					case errChan <- err:
+					case <-w.ctx.Done():
+					}
 					return
 				}
+
+				// Validate message before processing
 				if messageType != websocket.BinaryMessage {
 					w.Logger.Warn("Received non-binary message from %s", session.GetClientAddr())
 					continue
 				}
-				readChan <- message
+
+				if len(message) > int(w.MaxLength) {
+					w.Logger.Warn("Message exceeds maximum length from %s", session.GetClientAddr())
+					session.ClientConn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(100*time.Millisecond))
+					session.ClientConn.Close() // Close connection for security
+					session.CloseSession()
+					return
+				}
+
+				// Process the message
+				select {
+				case readChan <- message:
+				case <-w.ctx.Done():
+					return
+				default:
+					w.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
+				}
 			}
 		}
 	}()
@@ -216,19 +263,61 @@ func (w *WebSocketServer) handleSession(session *WebSocketSession) {
 				w.Logger.Error("WebSocket error: %v", err)
 			}
 			return
-		case message := <-readChan:
-			if len(message) > int(w.MaxLength) {
-				w.Logger.Warn("Message exceeds maximum length from %s", session.GetClientAddr())
-				continue
+		case message, ok := <-readChan:
+			if !ok {
+				return // Channel closed
 			}
-			session.receiveBytes(message)
+
+			// Process the received data with non-blocking send
+			select {
+			case session.DataChannel <- message:
+				session.updateLastReceived()
+			case <-w.ctx.Done():
+				return
+			default:
+				w.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
+			}
 		}
 	}
 }
 
+// closeSession closes a WebSocket session and cleans up resources
+func (w *WebSocketServer) closeSession(session *WebSocketSession) {
+	w.sessionsMutex.Lock()
+	defer w.sessionsMutex.Unlock()
+
+	// Check if session is already closed
+	if _, exists := w.sessions[session.GetClientAddr().String()]; !exists {
+		return
+	}
+
+	session.Cancel() // Cancel context from base session
+	session.ClientConn.WriteControl(websocket.CloseMessage, []byte{}, time.Now().Add(100*time.Millisecond))
+	session.ClientConn.Close()
+
+	select {
+	case <-session.DataChannel:
+		// Drain any remaining messages
+	default:
+	}
+	close(session.DataChannel)
+
+	delete(w.sessions, session.GetClientAddr().String())
+	w.Logger.Debug("Closed session for %s", session.GetClientAddr())
+
+	// Wait for cleanup to complete
+	time.Sleep(200 * time.Millisecond)
+}
+
 // GetActiveSessions returns all active sessions
 func (w *WebSocketServer) GetActiveSessions() map[string]Session {
-	return w.sessions
+	w.sessionsMutex.RLock()
+	defer w.sessionsMutex.RUnlock()
+	sessions := make(map[string]Session)
+	for k, v := range w.sessions {
+		sessions[k] = v
+	}
+	return sessions
 }
 
 // GetSession returns a specific session by client address
@@ -258,29 +347,22 @@ func (s *WebSocketSession) receiveBytes(data ...[]byte) {
 		if len(d) == 0 {
 			continue
 		}
-		s.DataChannel <- d
+		select {
+		case s.DataChannel <- d:
+		case <-s.server.ctx.Done():
+			return
+		default:
+			s.server.Logger.Warn("Channel full, dropping message")
+		}
 	}
 }
 
 // CloseSession closes the WebSocket session and cleans up resources
 func (s *WebSocketSession) CloseSession() {
-	s.server.sessionsMutex.Lock()
-	defer s.server.sessionsMutex.Unlock()
-
-	// Check if session is already closed
-	if _, exists := s.server.sessions[s.GetClientAddr().String()]; !exists {
-		return
-	}
-
-	s.Cancel() // Cancel context from base session
-	s.ClientConn.Close()
-	close(s.DataChannel)
-	delete(s.server.sessions, s.GetClientAddr().String())
-
-	s.server.Logger.Debug("Closed session for %s", s.GetClientAddr())
+	s.server.closeSession(s)
 }
 
-// GetLastRecieved maintains backward compatibility with the Session interface
+// GetLastRecieved implements the Session interface
 func (s *WebSocketSession) GetLastRecieved() time.Time {
-	return s.GetLastReceived()
+	return s.BaseSession.GetLastReceived()
 }

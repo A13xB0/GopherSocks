@@ -89,20 +89,24 @@ func (t *TCPServer) StopListener() error {
 	// Cancel context to stop all goroutines
 	t.cancel()
 
-	// Close all active sessions
-	t.sessionsMutex.Lock()
-	for _, session := range t.sessions {
-		session.CloseSession()
-	}
-	t.sessionsMutex.Unlock()
-
-	// Close listener
+	// Close listener to unblock any reads
 	if err := t.conn.Close(); err != nil {
-		return NewConnectionError("failed to close listener", err)
+		t.Logger.Error("Error closing listener: %v", err)
 	}
 
 	// Wait for all goroutines to finish
 	t.wg.Wait()
+
+	// Close all active sessions after goroutines are done
+	t.sessionsMutex.Lock()
+	for _, session := range t.sessions {
+		s := session.(*TCPSession)
+		s.conn.Close()
+		close(s.DataChannel)
+		delete(t.sessions, s.GetClientAddr().String())
+	}
+	t.sessionsMutex.Unlock()
+
 	return nil
 }
 
@@ -111,27 +115,44 @@ func (t *TCPServer) receiveStream() {
 	t.wg.Add(1)
 	defer t.wg.Done()
 
-	acceptChan := make(chan net.Conn)
-	errChan := make(chan error)
+	acceptChan := make(chan net.Conn, t.BufferSize)
+	errChan := make(chan error, 1)
 
 	// Accept connections in a separate goroutine
 	go func() {
+		defer close(acceptChan)
+		defer close(errChan)
+
 		for {
 			select {
 			case <-t.ctx.Done():
 				return
 			default:
 				// Set accept deadline to allow context cancellation
-				t.conn.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second))
+				t.conn.(*net.TCPListener).SetDeadline(time.Now().Add(100 * time.Millisecond))
 				conn, err := t.conn.Accept()
 				if err != nil {
 					if ne, ok := err.(net.Error); ok && ne.Timeout() {
 						continue // Deadline exceeded, try again
 					}
-					errChan <- err
+					if ne, ok := err.(net.Error); ok && ne.Temporary() {
+						t.Logger.Warn("Temporary error accepting connection: %v", err)
+						time.Sleep(100 * time.Millisecond) // Basic retry backoff
+						continue
+					}
+					select {
+					case errChan <- err:
+					case <-t.ctx.Done():
+					}
 					return
 				}
-				acceptChan <- conn
+
+				select {
+				case acceptChan <- conn:
+				case <-t.ctx.Done():
+					conn.Close()
+					return
+				}
 			}
 		}
 	}()
@@ -144,30 +165,30 @@ func (t *TCPServer) receiveStream() {
 		case err := <-errChan:
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				t.Logger.Warn("Temporary error accepting connection: %v", err)
-				time.Sleep(time.Second) // Basic retry backoff
+				time.Sleep(100 * time.Millisecond) // Basic retry backoff
 				continue
 			}
 			t.Logger.Error("Error accepting connection: %v", err)
 			return
-		case conn := <-acceptChan:
-			// Check max connections
-			t.sessionsMutex.RLock()
+		case conn, ok := <-acceptChan:
+			if !ok {
+				return // Channel closed
+			}
+
+			// Check max connections with write lock to prevent race
+			t.sessionsMutex.Lock()
 			if len(t.sessions) >= t.MaxConnections {
-				t.sessionsMutex.RUnlock()
+				t.sessionsMutex.Unlock()
 				t.Logger.Warn("Max connections reached, rejecting connection from %s", conn.RemoteAddr())
 				conn.Close()
-				continue
+				t.cancel() // Stop accepting new connections
+				return
 			}
-			t.sessionsMutex.RUnlock()
 
-			// Set connection timeouts
-			conn.SetReadDeadline(time.Now().Add(t.ReadTimeout))
-			conn.SetWriteDeadline(time.Now().Add(t.WriteTimeout))
+			// Create new session under write lock
+			session := t.newSession(conn.RemoteAddr(), conn)
+			t.sessionsMutex.Unlock()
 
-			clientAddr := conn.RemoteAddr()
-			t.Logger.Debug("New connection from %s", clientAddr)
-
-			session := t.newSession(clientAddr, conn)
 			go t.handleSession(session)
 		}
 	}
@@ -175,7 +196,7 @@ func (t *TCPServer) receiveStream() {
 
 // newSession creates a new TCP session
 func (t *TCPServer) newSession(addr net.Addr, conn net.Conn) *TCPSession {
-	base := NewBaseSession(addr, context.Background(), t.Logger)
+	base := NewBaseSession(addr, t.ctx, t.Logger) // Use server context
 	base.ID = uuid.NewString()
 
 	session := &TCPSession{
@@ -184,9 +205,7 @@ func (t *TCPServer) newSession(addr net.Addr, conn net.Conn) *TCPSession {
 		conn:        conn,
 	}
 
-	t.sessionsMutex.Lock()
 	t.sessions[addr.String()] = session
-	t.sessionsMutex.Unlock()
 
 	if t.announceMiddleware != nil {
 		t.announceMiddleware(t.announceMiddlewareOpts, session)
@@ -201,7 +220,13 @@ func (t *TCPServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, optio
 }
 
 func (t *TCPServer) GetActiveSessions() map[string]Session {
-	return t.sessions
+	t.sessionsMutex.RLock()
+	defer t.sessionsMutex.RUnlock()
+	sessions := make(map[string]Session)
+	for k, v := range t.sessions {
+		sessions[k] = v
+	}
+	return sessions
 }
 
 func (t *TCPServer) GetSession(ClientAddr string) Session {
@@ -239,59 +264,83 @@ func (s *TCPSession) SendToClient(data []byte) error {
 func (t *TCPServer) handleSession(session *TCPSession) {
 	t.wg.Add(1)
 	defer t.wg.Done()
-	defer session.CloseSession()
+	defer t.closeSession(session)
 
 	for {
-		// Set read deadline
-		if err := session.conn.SetReadDeadline(time.Now().Add(t.ReadTimeout)); err != nil {
-			t.Logger.Error("Failed to set read deadline: %v", err)
+		select {
+		case <-t.ctx.Done():
 			return
-		}
-
-		// Read message length
-		var length uint32
-		if err := binary.Read(session.conn, binary.BigEndian, &length); err != nil {
-			if err == io.EOF {
-				t.Logger.Debug("Connection closed by client: %s", session.GetClientAddr())
+		default:
+			// Set read deadline
+			if err := session.conn.SetReadDeadline(time.Now().Add(t.ReadTimeout)); err != nil {
+				t.Logger.Error("Failed to set read deadline: %v", err)
 				return
 			}
-			t.Logger.Error("Error reading message length: %v", err)
-			return
-		}
 
-		// Validate message length
-		if length > t.MaxLength {
-			t.Logger.Warn("Message exceeds maximum length from %s", session.GetClientAddr())
-			continue
-		}
+			// Read message length
+			var length uint32
+			if err := binary.Read(session.conn, binary.BigEndian, &length); err != nil {
+				if err == io.EOF {
+					t.Logger.Debug("Connection closed by client: %s", session.GetClientAddr())
+					return
+				}
+				t.Logger.Error("Error reading message length: %v", err)
+				return
+			}
 
-		// Read message data
-		buffer := make([]byte, length)
-		if _, err := io.ReadFull(session.conn, buffer); err != nil {
-			t.Logger.Error("Error reading message data: %v", err)
-			return
-		}
+			// Validate message length
+			if length > t.MaxLength {
+				t.Logger.Warn("Message exceeds maximum length from %s", session.GetClientAddr())
+				session.conn.Close() // Close connection for security
+				session.CloseSession()
+				return
+			}
 
-		// Update last received time and send to channel
-		session.updateLastReceived()
-		session.DataChannel <- buffer
+			// Read message data
+			buffer := make([]byte, length)
+			if _, err := io.ReadFull(session.conn, buffer); err != nil {
+				t.Logger.Error("Error reading message data: %v", err)
+				return
+			}
+
+			// Update last received time and send to channel
+			session.updateLastReceived()
+			select {
+			case session.DataChannel <- buffer:
+			case <-t.ctx.Done():
+				return
+			default:
+				t.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
+			}
+		}
 	}
+}
+
+// closeSession closes a TCP session and cleans up resources
+func (t *TCPServer) closeSession(session *TCPSession) {
+	t.sessionsMutex.Lock()
+	defer t.sessionsMutex.Unlock()
+
+	// Check if session is already closed
+	if _, exists := t.sessions[session.GetClientAddr().String()]; !exists {
+		return
+	}
+
+	session.Cancel() // Cancel context from base session
+	session.conn.Close()
+
+	select {
+	case <-session.DataChannel:
+		// Drain any remaining messages
+	default:
+	}
+	close(session.DataChannel)
+
+	delete(t.sessions, session.GetClientAddr().String())
+	t.Logger.Debug("Closed session for %s", session.GetClientAddr())
 }
 
 // CloseSession closes the TCP session and cleans up resources
 func (s *TCPSession) CloseSession() {
-	s.server.sessionsMutex.Lock()
-	defer s.server.sessionsMutex.Unlock()
-
-	// Check if session is already closed
-	if _, exists := s.server.sessions[s.GetClientAddr().String()]; !exists {
-		return
-	}
-
-	s.Cancel() // Cancel context from base session
-	s.conn.Close()
-	close(s.DataChannel)
-	delete(s.server.sessions, s.GetClientAddr().String())
-
-	s.server.Logger.Debug("Closed session for %s", s.GetClientAddr())
+	s.server.closeSession(s)
 }
