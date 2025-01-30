@@ -1,4 +1,4 @@
-# GopherSocks
+![GopherSocks](docs/Banner.png)
 
 GopherSocks is a high-performance networking library for Go that provides TCP, UDP, and WebSocket servers with advanced session management capabilities. It's designed for building robust network applications with support for multiple protocols and efficient connection handling.
 
