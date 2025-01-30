@@ -1,8 +1,9 @@
-// This package handles streaming listenerprotocols as an interface
+// This package handles streaming listener protocols as an interface
 package gophersocks
 
 import (
 	"context"
+
 	"github.com/A13xB0/GopherSocks/listener"
 )
 
@@ -14,7 +15,7 @@ type Listener interface {
 	// StopReceiveStream Stops listener for stream transport
 	StopListener() error
 
-	// SetAnnounceNewSession Sets middlware for announcing a new session
+	// SetAnnounceNewSession Sets middleware for announcing a new session
 	SetAnnounceNewSession(function listener.AnnounceMiddlewareFunc, options any)
 
 	//Getters
@@ -26,44 +27,61 @@ type Listener interface {
 	GetSession(ClientAddr string) listener.Session
 }
 
-// NewTCPListener creates a new Stream handler for your chosen stream type
-func NewTCPListener(host string, port uint16, opts ...TCPOptFunc) (Listener, error) {
+// NewTCPListener creates a new TCP stream handler
+func NewTCPListener(host string, port uint16, opts ...ServerOptFunc) (Listener, error) {
 	return NewTCPListenerWithContext(host, port, context.Background(), opts...)
 }
 
-// NewTCPListenerWithContext creates a new Stream handler for your chosen stream type, with context
-func NewTCPListenerWithContext(host string, port uint16, ctx context.Context, opts ...TCPOptFunc) (Listener, error) {
-	tcpConfig := tcpDefaultConfig()
-	for _, fn := range opts {
-		fn(&tcpConfig)
-	}
-	return listener.NewTCP(host, port, ctx, tcpConfig)
+// NewTCPListenerWithContext creates a new TCP stream handler with context
+func NewTCPListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
+	listenerOpts := convertToListenerOptions(opts)
+	return listener.NewTCP(host, port, ctx, listenerOpts...)
 }
 
-// NewUDPListener creates a new Stream handler for your chosen stream type
-func NewUDPListener(host string, port uint16, opts ...UDPOptFunc) (Listener, error) {
+// NewUDPListener creates a new UDP stream handler
+func NewUDPListener(host string, port uint16, opts ...ServerOptFunc) (Listener, error) {
 	return NewUDPListenerWithContext(host, port, context.Background(), opts...)
 }
 
-// NewUDPListenerWithContext creates a new Stream handler for your chosen stream type, with context
-func NewUDPListenerWithContext(host string, port uint16, ctx context.Context, opts ...UDPOptFunc) (Listener, error) {
-	udpConfig := udpDefaultConfig()
-	for _, fn := range opts {
-		fn(&udpConfig)
-	}
-	return listener.NewUDP(host, port, ctx, udpConfig)
+// NewUDPListenerWithContext creates a new UDP stream handler with context
+func NewUDPListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
+	listenerOpts := convertToListenerOptions(opts)
+	return listener.NewUDP(host, port, ctx, listenerOpts...)
 }
 
-// NewWebsocketsListener creates a new Stream handler for your chosen stream type
-func NewWebsocketsListener(host string, port uint16, opts ...WebsocketOptFunc) (Listener, error) {
-	return NewWebsocketsListenerWithContext(host, port, context.Background(), opts...)
+// NewWebSocketListener creates a new WebSocket stream handler (previously NewWebsocketsListener)
+func NewWebSocketListener(host string, port uint16, opts ...ServerOptFunc) (Listener, error) {
+	return NewWebSocketListenerWithContext(host, port, context.Background(), opts...)
 }
 
-// NewWebsocketsListenerWithContext creates a new Stream handler for your chosen stream type, with context
-func NewWebsocketsListenerWithContext(host string, port uint16, ctx context.Context, opts ...WebsocketOptFunc) (Listener, error) {
-	wsConfig := websocketDefaultConfig()
-	for _, fn := range opts {
-		fn(&wsConfig)
+// NewWebSocketListenerWithContext creates a new WebSocket stream handler with context
+func NewWebSocketListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
+	config := convertToServerConfig(opts...)
+	// Set default WebSocket-specific configuration
+	if config.ProtocolConfig == nil {
+		config.ProtocolConfig = &WebSocketConfig{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			Path:            "/ws",
+		}
 	}
-	return listener.NewWebSocket(host, port, ctx, wsConfig)
+	listenerOpts := convertToListenerOptions(opts)
+	return listener.NewWebSocket(host, port, ctx, listenerOpts...)
+}
+
+// convertToListenerOptions converts our ServerOptFunc options to listener.ServerOption options
+func convertToListenerOptions(opts []ServerOptFunc) []listener.ServerOption {
+	config := convertToServerConfig(opts...)
+	listenerOpts := make([]listener.ServerOption, 0)
+
+	// Convert our config settings to listener.ServerOption functions
+	listenerOpts = append(listenerOpts,
+		listener.WithMaxLength(config.MaxLength),
+		listener.WithBufferSize(config.BufferSize),
+		listener.WithLogger(config.Logger),
+		listener.WithTimeouts(config.ReadTimeout, config.WriteTimeout),
+		listener.WithMaxConnections(config.MaxConnections),
+	)
+
+	return listenerOpts
 }
