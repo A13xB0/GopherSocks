@@ -14,14 +14,22 @@ GopherSocks is a versatile Go network stream wrapper that simplifies raw data tr
   - Automatic connection tracking
   - Unique session identifiers
   - Connection lifecycle management
+  - Graceful shutdown handling
 - 🛠 **Easy-to-Use Interface**
   - Consistent API across protocols
   - Simple listener setup
   - Flexible client configuration
-- 🔧 **Customizable Options**
+  - Fluent configuration API
+- 🔧 **Advanced Features**
   - Configurable connection settings
   - Protocol-specific optimizations
   - Extensible architecture
+  - Context-based cancellation
+  - Connection timeouts
+  - Maximum message size limits
+  - Connection pooling
+  - Structured error handling
+  - Built-in logging interface
 
 ## Installation
 
@@ -30,6 +38,24 @@ go get github.com/A13xB0/GopherSocks
 ```
 
 ## Usage
+
+### Configuration Options
+
+GopherSocks provides a flexible configuration system using the Option pattern:
+
+```go
+// Create a listener with custom configuration
+listener, err := gophersocks.NewTCPListener(
+    "0.0.0.0",
+    8080,
+    context.Background(),
+    // Configure options
+    gophersocks.WithMaxLength(1024*1024), // 1MB max message size
+    gophersocks.WithBufferSize(100),      // Channel buffer size
+    gophersocks.WithTimeouts(30, 30),     // 30 second read/write timeouts
+    gophersocks.WithMaxConnections(1000), // Maximum concurrent connections
+)
+```
 
 ### Session Management Functions
 
@@ -46,10 +72,7 @@ clientAddr := session.GetClientAddr()
 lastReceived := session.GetLastReceived()
 
 // Manually close a session
-err := session.CloseSession()
-if err != nil {
-    log.Printf("Error closing session: %s\n", err)
-}
+session.CloseSession()
 ```
 
 ### TCP Listener Example
@@ -58,14 +81,27 @@ if err != nil {
 package main
 
 import (
+    "context"
     "fmt"
+    "time"
     gophersocks "github.com/A13xB0/GopherSocks"
     "github.com/A13xB0/GopherSocks/listener"
 )
 
 func main() {
-    // Create a new TCP listener
-    tListener, err := gophersocks.NewTCPListener("0.0.0.0", 8080)
+    // Create context for graceful shutdown
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+
+    // Create a new TCP listener with configuration
+    tListener, err := gophersocks.NewTCPListener(
+        "0.0.0.0",
+        8080,
+        ctx,
+        gophersocks.WithMaxLength(1024*1024),
+        gophersocks.WithBufferSize(100),
+        gophersocks.WithTimeouts(30, 30),
+    )
     if err != nil {
         panic(err)
     }
@@ -90,12 +126,11 @@ func handleNewSession(options any, session listener.Session) {
 
 // Process incoming data for a session
 func processSessionData(session listener.Session) {
-    // Read data from the session's data channel
+    defer session.CloseSession() // Ensure session cleanup
+
     for data := range session.Data() {
-        // Print received data
         fmt.Printf("Received data: %s\n", data)
 
-        // Echo the data back to the client
         if err := session.SendToClient(data); err != nil {
             fmt.Printf("Error sending to client: %s\n", err)
             return
@@ -104,26 +139,31 @@ func processSessionData(session listener.Session) {
 }
 ```
 
-This example demonstrates:
-- Setting up a TCP listener
-- Handling new client connections
-- Processing incoming data
-- Sending responses back to clients
-
 ### UDP Listener Example
 
 ```go
 package main
 
 import (
+    "context"
     "fmt"
     gophersocks "github.com/A13xB0/GopherSocks"
     "github.com/A13xB0/GopherSocks/listener"
 )
 
 func main() {
-    // Create a new UDP listener
-    udpListener, err := gophersocks.NewUDPListener("0.0.0.0", 8081)
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+
+    // Create a new UDP listener with configuration
+    udpListener, err := gophersocks.NewUDPListener(
+        "0.0.0.0",
+        8081,
+        ctx,
+        gophersocks.WithMaxLength(65507), // Maximum UDP datagram size
+        gophersocks.WithBufferSize(1000), // Larger buffer for UDP
+        gophersocks.WithTimeouts(60, 60), // Longer timeouts for UDP
+    )
     if err != nil {
         panic(err)
     }
@@ -142,12 +182,12 @@ func handleUDPSession(options any, session listener.Session) {
     fmt.Printf("New UDP session from %v - Session ID: %v\n", 
         session.GetClientAddr(), session.GetSessionID())
     
-    // Process datagrams for this session
     go func() {
+        defer session.CloseSession() // Ensure session cleanup
+
         for datagram := range session.Data() {
             fmt.Printf("Received datagram: %s\n", datagram)
             
-            // Send response datagram
             if err := session.SendToClient(datagram); err != nil {
                 fmt.Printf("Error sending datagram: %s\n", err)
                 return
@@ -157,26 +197,31 @@ func handleUDPSession(options any, session listener.Session) {
 }
 ```
 
-This example demonstrates:
-- Setting up a UDP listener
-- Handling UDP sessions
-- Processing datagrams
-- Sending response datagrams
-
 ### WebSocket Listener Example
 
 ```go
 package main
 
 import (
+    "context"
     "fmt"
     gophersocks "github.com/A13xB0/GopherSocks"
     "github.com/A13xB0/GopherSocks/listener"
 )
 
 func main() {
-    // Create a new WebSocket listener
-    wsListener, err := gophersocks.NewWebSocketListener("0.0.0.0", 8082)
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+
+    // Create a new WebSocket listener with configuration
+    wsListener, err := gophersocks.NewWebSocketListener(
+        "0.0.0.0",
+        8082,
+        ctx,
+        gophersocks.WithMaxLength(1024*1024),
+        gophersocks.WithBufferSize(100),
+        gophersocks.WithTimeouts(30, 30),
+    )
     if err != nil {
         panic(err)
     }
@@ -195,12 +240,12 @@ func handleWSSession(options any, session listener.Session) {
     fmt.Printf("New WebSocket connection from %v - Session ID: %v\n", 
         session.GetClientAddr(), session.GetSessionID())
     
-    // Process WebSocket messages
     go func() {
+        defer session.CloseSession() // Ensure session cleanup
+
         for message := range session.Data() {
             fmt.Printf("Received message: %s\n", message)
             
-            // Send response message
             if err := session.SendToClient(message); err != nil {
                 fmt.Printf("Error sending message: %s\n", err)
                 return
@@ -210,23 +255,29 @@ func handleWSSession(options any, session listener.Session) {
 }
 ```
 
-This example demonstrates:
-- Setting up a WebSocket listener
-- Handling WebSocket connections
-- Processing WebSocket messages
-- Sending response messages
-
 ## Project Status
 
-GopherSocks is under active development. Current development priorities include:
+GopherSocks is under active development. Recent improvements include:
 
-- [ ] Adding line break delimiter support for TCP (currently only length-delimited)
-- [ ] Expanding test coverage
-- [ ] Implementing protocol configuration options
-- [ ] Adding logger interface
+✅ Implemented flexible configuration system using Option pattern  
+✅ Added context-based cancellation support  
+✅ Added connection timeouts and deadlines  
+✅ Implemented maximum message size limits  
+✅ Added connection pooling with max connections  
+✅ Improved session cleanup and resource management  
+✅ Added structured error handling  
+✅ Implemented logging interface  
+✅ Enhanced graceful shutdown handling  
+
+Current development priorities:
+- [ ] Adding TLS support
+- [ ] Implementing connection backoff/retry
+- [ ] Adding metrics and monitoring
 - [ ] Enhancing client implementations
-- [ ] Implementing goroutine workgroups
-- [ ] Code documentation improvements
+- [ ] Expanding test coverage
+- [ ] Adding protocol compression support
+- [ ] Implementing connection keep-alive
+- [ ] Adding protocol multiplexing
 
 ## Dependencies
 
