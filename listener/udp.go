@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +39,10 @@ type UDPConfig struct {
 
 // Create new UDP Listener Object
 func NewUDP(host string, port uint16, ctx context.Context, config UDPConfig) (*UDPServer, error) {
+	// Handle IPv6 addresses by wrapping them in []
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
 	addr := fmt.Sprintf("%v:%v", host, port)
 	udpContext, cancel := context.WithCancel(ctx)
 	return &UDPServer{addr: addr, ctx: udpContext, cancel: cancel, UDPConfig: config, sessions: make(map[string]Session)}, nil
@@ -44,8 +50,17 @@ func NewUDP(host string, port uint16, ctx context.Context, config UDPConfig) (*U
 
 // Start Go Routine to listen for UDP packets
 func (u *UDPServer) StartListener() error {
-	//Announce listening port and open
-	conn, err := net.ListenPacket("udp", u.addr)
+	// Enable dual-stack mode (IPv4 and IPv6)
+	config := &net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				// Enable dual-stack
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 0)
+			})
+		},
+	}
+	conn, err := config.ListenPacket(context.Background(), "udp", u.addr)
 	if err != nil {
 		return err
 	}

@@ -7,8 +7,8 @@ GopherSocks is a versatile Go network stream wrapper that simplifies raw data tr
 ## Features
 
 - 🔌 **Multi-Protocol Support**
-  - TCP with length-delimited messaging
-  - UDP with datagram handling
+  - TCP with length-delimited messaging and dual-stack (IPv4/IPv6) support
+  - UDP with datagram handling and dual-stack (IPv4/IPv6) support
   - WebSocket support using Gorilla WebSocket
 - 🔄 **Session Management**
   - Automatic connection tracking
@@ -52,6 +52,53 @@ if err != nil {
 }
 ```
 
+### Dual-Stack (IPv4/IPv6) Example
+
+```go
+package main
+
+import (
+    "fmt"
+    gophersocks "github.com/A13xB0/GopherSocks"
+    "github.com/A13xB0/GopherSocks/listener"
+)
+
+func main() {
+    // Create a dual-stack listener that accepts both IPv4 and IPv6 connections
+    // Using "::" binds to all interfaces and enables dual-stack mode
+    dualStackListener, err := gophersocks.NewTCPListener("::", 8080)
+    if err != nil {
+        panic(err)
+    }
+
+    // Set up session announcement handler
+    dualStackListener.SetAnnounceNewSession(func(options any, session listener.Session) {
+        // This handler will be called for both IPv4 and IPv6 connections
+        addr := session.GetClientAddr()
+        fmt.Printf("New connection from %v (Protocol: %v) - Session ID: %v\n",
+            addr, addr.Network(), session.GetSessionID())
+        
+        go func() {
+            for data := range session.Data() {
+                fmt.Printf("Received data from %v: %s\n", addr, data)
+                session.SendToClient(data)
+            }
+        }()
+    }, nil)
+
+    // Start listening - will accept both IPv4 and IPv6 connections
+    if err := dualStackListener.StartListener(); err != nil {
+        panic(err)
+    }
+}
+```
+
+This example demonstrates:
+- Setting up a single listener that handles both IPv4 and IPv6 connections
+- Using "::" to bind to all interfaces in dual-stack mode
+- Identifying the protocol (IPv4/IPv6) of incoming connections
+- Processing data from both types of connections
+
 ### TCP Listener Example
 
 ```go
@@ -64,8 +111,14 @@ import (
 )
 
 func main() {
-    // Create a new TCP listener
+    // Create a new TCP listener (IPv4)
     tListener, err := gophersocks.NewTCPListener("0.0.0.0", 8080)
+    if err != nil {
+        panic(err)
+    }
+
+    // Or use IPv6
+    tListener6, err := gophersocks.NewTCPListener("::", 8080)
     if err != nil {
         panic(err)
     }
@@ -122,8 +175,14 @@ import (
 )
 
 func main() {
-    // Create a new UDP listener
+    // Create a new UDP listener (IPv4)
     udpListener, err := gophersocks.NewUDPListener("0.0.0.0", 8081)
+    if err != nil {
+        panic(err)
+    }
+
+    // Or use IPv6
+    udpListener6, err := gophersocks.NewUDPListener("::", 8081)
     if err != nil {
         panic(err)
     }

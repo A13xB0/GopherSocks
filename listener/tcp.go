@@ -1,12 +1,14 @@
 package listener
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/net/context"
 	"io"
 	"net"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +43,10 @@ type TCPConfig struct {
 }
 
 func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*TCPServer, error) {
+	// Handle IPv6 addresses by wrapping them in []
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
 	addr := fmt.Sprintf("%v:%v", host, port)
 	tcpContext, cancel := context.WithCancel(ctx)
 	return &TCPServer{addr: addr, ctx: tcpContext, cancel: cancel, TCPConfig: config, sessions: make(map[string]Session)}, nil
@@ -48,7 +54,17 @@ func NewTCP(host string, port uint16, ctx context.Context, config TCPConfig) (*T
 
 func (t *TCPServer) StartListener() error {
 	//Start listening for connections
-	conn, err := net.Listen("tcp", t.addr)
+	// Enable dual-stack mode (IPv4 and IPv6)
+	config := &net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				// Enable dual-stack
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 0)
+			})
+		},
+	}
+	conn, err := config.Listen(context.Background(), "tcp", t.addr)
 	if err != nil {
 		return err
 	}
