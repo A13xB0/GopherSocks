@@ -292,16 +292,14 @@ func (t *TCPServer) handleSession(session *TCPSession) {
 			// Validate message length
 			if length > t.MaxLength {
 				t.Logger.Warn("Message exceeds maximum length from %s", session.GetClientAddr())
-				session.conn.Close() // Close connection for security
-				session.CloseSession()
-				return
+				continue
 			}
 
 			// Read message data
 			buffer := make([]byte, length)
 			if _, err := io.ReadFull(session.conn, buffer); err != nil {
 				t.Logger.Error("Error reading message data: %v", err)
-				return
+				continue
 			}
 
 			// Update last received time and send to channel

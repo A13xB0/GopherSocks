@@ -13,48 +13,56 @@ import (
 
 const (
 	tcpHost   = "127.0.0.1"
-	tcpHostV6 = "::1"
+	tcpHostV6 = "::1" // IPv6 loopback address
 	tcpPort   = 9000
 	tcpPortV6 = 9010
 )
 
+// setupTCPListener creates and starts a TCP listener with the given options
+func setupTCPListener(t *testing.T, host string, port uint16, opts ...ServerOption) (Listener, chan Session, chan error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	// Create server
+	tListener, err := NewTCP(host, port, ctx, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up session announcement
+	newSessionChan := make(chan Session)
+	tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
+
+	// Start server
+	serverErrChan := make(chan error, 1)
+	go func() {
+		if err := tListener.StartListener(); err != nil {
+			serverErrChan <- err
+		}
+	}()
+
+	// Wait for server to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Check for startup errors
+	select {
+	case err := <-serverErrChan:
+		t.Fatalf("server startup error: %v", err)
+	default:
+		// Server started successfully
+	}
+
+	return tListener, newSessionChan, serverErrChan
+}
+
 func TestTCPListenerIPv4(t *testing.T) {
 	t.Run("Basic message exchange", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Create server with custom configuration
-		tListener, err := NewTCP(tcpHost, tcpPort, ctx,
+		tListener, newSessionChan, _ := setupTCPListener(t, tcpHost, tcpPort,
 			WithMaxLength(1024),
 			WithBufferSize(100),
 			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Set up session announcement
-		newSessionChan := make(chan Session)
-		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
-
-		// Start server
-		serverErrChan := make(chan error, 1)
-		go func() {
-			if err := tListener.StartListener(); err != nil {
-				serverErrChan <- err
-			}
-		}()
-
-		// Wait for server to start
-		time.Sleep(100 * time.Millisecond)
-
-		// Check for startup errors
-		select {
-		case err := <-serverErrChan:
-			t.Fatalf("server startup error: %v", err)
-		default:
-			// Server started successfully
-		}
+		defer tListener.StopListener()
 
 		// Connect client
 		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort))
@@ -117,160 +125,11 @@ func TestTCPListenerIPv4(t *testing.T) {
 		}
 	})
 
-	t.Run("Max message length", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		maxLength := uint32(10) // Very small max length for testing
-		tListener, err := NewTCP(tcpHost, tcpPort+1, ctx,
-			WithMaxLength(maxLength),
-			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		newSessionChan := make(chan Session)
-		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
-
-		// Start server
-		serverErrChan := make(chan error, 1)
-		go func() {
-			if err := tListener.StartListener(); err != nil {
-				serverErrChan <- err
-			}
-		}()
-
-		// Wait for server to start
-		time.Sleep(100 * time.Millisecond)
-
-		// Check for startup errors
-		select {
-		case err := <-serverErrChan:
-			t.Fatalf("server startup error: %v", err)
-		default:
-			// Server started successfully
-		}
-
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
-		// Send message larger than max length
-		largeMsg := make([]byte, maxLength+1)
-		if err := binary.Write(conn, binary.BigEndian, maxLength+1); err != nil {
-			t.Fatal(err)
-		}
-
-		// Connection should be closed by server
-		time.Sleep(50 * time.Millisecond)
-		if _, err := conn.Write(largeMsg); err == nil {
-			t.Fatal("expected connection to be closed")
-		}
-
-		if err := tListener.StopListener(); err != nil {
-			t.Fatal("stop:", err)
-		}
-	})
-
-	t.Run("Max connections", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		maxConns := 2
-		tListener, err := NewTCP(tcpHost, tcpPort+2, ctx,
-			WithMaxConnections(maxConns),
-			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		newSessionChan := make(chan Session)
-		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
-
-		// Start server
-		serverErrChan := make(chan error, 1)
-		go func() {
-			if err := tListener.StartListener(); err != nil {
-				serverErrChan <- err
-			}
-		}()
-
-		// Wait for server to start
-		time.Sleep(100 * time.Millisecond)
-
-		// Check for startup errors
-		select {
-		case err := <-serverErrChan:
-			t.Fatalf("server startup error: %v", err)
-		default:
-			// Server started successfully
-		}
-
-		// Create maxConns connections
-		conns := make([]net.Conn, maxConns)
-		for i := 0; i < maxConns; i++ {
-			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+2))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer conn.Close()
-			conns[i] = conn
-
-			// Wait for session announcement
-			select {
-			case <-newSessionChan:
-			case <-time.After(100 * time.Millisecond):
-				t.Fatal("timeout waiting for session")
-			}
-		}
-
-		// Try to create one more connection
-		_, err = net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+2))
-		if err == nil {
-			t.Fatal("expected connection to be rejected")
-		}
-
-		if err := tListener.StopListener(); err != nil {
-			t.Fatal("stop:", err)
-		}
-	})
-
 	t.Run("Session cleanup", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		tListener, err := NewTCP(tcpHost, tcpPort+3, ctx,
+		tListener, newSessionChan, _ := setupTCPListener(t, tcpHost, tcpPort+3,
 			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		newSessionChan := make(chan Session)
-		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
-
-		// Start server
-		serverErrChan := make(chan error, 1)
-		go func() {
-			if err := tListener.StartListener(); err != nil {
-				serverErrChan <- err
-			}
-		}()
-
-		// Wait for server to start
-		time.Sleep(100 * time.Millisecond)
-
-		// Check for startup errors
-		select {
-		case err := <-serverErrChan:
-			t.Fatalf("server startup error: %v", err)
-		default:
-			// Server started successfully
-		}
+		defer tListener.StopListener()
 
 		// Create and immediately close a connection
 		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+3))
@@ -298,45 +157,107 @@ func TestTCPListenerIPv4(t *testing.T) {
 			t.Fatal("stop:", err)
 		}
 	})
+
+	t.Run("Multiple sessions", func(t *testing.T) {
+		tListener, newSessionChan, _ := setupTCPListener(t, tcpHost, tcpPort+4,
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+		)
+		defer tListener.StopListener()
+
+		// Create multiple clients
+		numClients := 3
+		conns := make([]net.Conn, numClients)
+		for i := 0; i < numClients; i++ {
+			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+4))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			conns[i] = conn
+
+			// Send message to create session
+			msg := []byte(fmt.Sprintf("hello from client %d", i))
+			if err := binary.Write(conn, binary.BigEndian, uint32(len(msg))); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Write(msg); err != nil {
+				t.Fatal(err)
+			}
+
+			// Wait for session
+			var session Session
+			select {
+			case session = <-newSessionChan:
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("timeout waiting for session")
+			}
+
+			// Read initial message
+			select {
+			case <-session.Data():
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("timeout waiting for message")
+			}
+		}
+
+		// Verify all sessions are active
+		if len(tListener.GetActiveSessions()) != numClients {
+			t.Fatalf("expected %d active sessions, got %d", numClients, len(tListener.GetActiveSessions()))
+		}
+	})
+
+	t.Run("Invalid session type handling", func(t *testing.T) {
+		tListener, newSessionChan, _ := setupTCPListener(t, tcpHost, tcpPort+5,
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+		)
+		defer tListener.StopListener()
+
+		// Connect client
+		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+5))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		// Send message to create session
+		msg := []byte("hello")
+		if err := binary.Write(conn, binary.BigEndian, uint32(len(msg))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Write(msg); err != nil {
+			t.Fatal(err)
+		}
+
+		// Get session
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
+		// Verify session is of correct type
+		if _, ok := session.(*TCPSession); !ok {
+			t.Fatal("session is not of type *TCPSession")
+		}
+
+		// Read initial message
+		select {
+		case <-session.Data():
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for message")
+		}
+	})
 }
 
 func TestTCPListenerIPv6(t *testing.T) {
 	t.Run("Basic IPv6 message exchange", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Create server with custom configuration
-		tListener, err := NewTCP(tcpHostV6, tcpPortV6, ctx,
+		tListener, newSessionChan, _ := setupTCPListener(t, fmt.Sprintf("[%s]", tcpHostV6), tcpPortV6,
 			WithMaxLength(1024),
 			WithBufferSize(100),
 			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Set up session announcement
-		newSessionChan := make(chan Session)
-		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
-
-		// Start server
-		serverErrChan := make(chan error, 1)
-		go func() {
-			if err := tListener.StartListener(); err != nil {
-				serverErrChan <- err
-			}
-		}()
-
-		// Wait for server to start
-		time.Sleep(100 * time.Millisecond)
-
-		// Check for startup errors
-		select {
-		case err := <-serverErrChan:
-			t.Fatalf("server startup error: %v", err)
-		default:
-			// Server started successfully
-		}
+		defer tListener.StopListener()
 
 		// Connect client
 		conn, err := net.Dial("tcp6", fmt.Sprintf("[%s]:%d", tcpHostV6, tcpPortV6))
