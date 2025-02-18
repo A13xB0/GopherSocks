@@ -56,7 +56,7 @@ go get github.com/A13xB0/GopherSocks
 
 ## Usage Examples
 
-### TCP Server
+### TCP Server (IPv4)
 
 ```go
 package main
@@ -100,6 +100,128 @@ func main() {
             }
         }()
     }, nil)
+
+    // Start server
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
+}
+```
+
+### TCP Server (IPv6)
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "os/signal"
+    "syscall"
+
+    gophersocks "github.com/A13xB0/GopherSocks"
+)
+
+func main() {
+    // Create TCP server with IPv6
+    server, err := gophersocks.NewTCPListener(
+        "[::1]", // IPv6 loopback address
+        8001,
+        gophersocks.WithMaxLength(1024*1024),
+        gophersocks.WithBufferSize(100),
+        gophersocks.WithTimeouts(30, 30),
+        gophersocks.WithMaxConnections(1000),
+    )
+    if err != nil {
+        fmt.Printf("Failed to create server: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Handle new sessions
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New IPv6 connection from %v\n", session.GetClientAddr())
+        
+        go func() {
+            for data := range session.Data() {
+                if err := session.SendToClient(data); err != nil {
+                    fmt.Printf("Send error: %v\n", err)
+                    return
+                }
+            }
+        }()
+    }, nil)
+
+    // Start server
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
+}
+```
+
+### TCP Server (Dual Stack)
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "os/signal"
+    "syscall"
+
+    gophersocks "github.com/A13xB0/GopherSocks"
+)
+
+func main() {
+    // Create dual-stack TCP server
+    server, err := gophersocks.NewTCPListener(
+        "::", // Bind to all interfaces (IPv4 and IPv6)
+        8001,
+        gophersocks.WithMaxLength(1024*1024),
+        gophersocks.WithBufferSize(100),
+        gophersocks.WithTimeouts(30, 30),
+        gophersocks.WithMaxConnections(1000),
+    )
+    if err != nil {
+        fmt.Printf("Failed to create server: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Handle new sessions
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New connection from %v\n", session.GetClientAddr())
+        
+        go func() {
+            for data := range session.Data() {
+                if err := session.SendToClient(data); err != nil {
+                    fmt.Printf("Send error: %v\n", err)
+                    return
+                }
+            }
+        }()
+    }, nil)
+
+    fmt.Println("Dual-stack TCP server listening on [::]:8001")
+    fmt.Println("IPv4: 0.0.0.0:8001")
+    fmt.Println("IPv6: [::]:8001")
 
     // Start server
     if err := server.StartListener(); err != nil {

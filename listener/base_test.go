@@ -7,11 +7,23 @@ import (
 	"time"
 )
 
+// getTestConfig returns a ServerConfig for testing
+func getTestConfig() *ServerConfig {
+	return &ServerConfig{
+		MaxLength:      1024 * 1024,
+		BufferSize:     100,
+		ReadTimeout:    time.Second * 30,
+		WriteTimeout:   time.Second * 30,
+		Logger:         &DefaultLogger{},
+		MaxConnections: 1000,
+	}
+}
+
 func TestBaseSession(t *testing.T) {
 	t.Run("Session initialization", func(t *testing.T) {
 		addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
 		logger := &DefaultLogger{}
-		session := NewBaseSession(addr, context.Background(), logger)
+		session := NewBaseSession(addr, context.Background(), logger, getTestConfig())
 
 		if session.ClientAddr != addr {
 			t.Errorf("expected client address %v, got %v", addr, session.ClientAddr)
@@ -32,7 +44,7 @@ func TestBaseSession(t *testing.T) {
 
 	t.Run("Last received time", func(t *testing.T) {
 		addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
-		session := NewBaseSession(addr, context.Background(), &DefaultLogger{})
+		session := NewBaseSession(addr, context.Background(), &DefaultLogger{}, getTestConfig())
 
 		initialTime := session.GetLastReceived()
 		time.Sleep(time.Millisecond * 10)
@@ -46,7 +58,7 @@ func TestBaseSession(t *testing.T) {
 
 	t.Run("Context cancellation", func(t *testing.T) {
 		addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
-		session := NewBaseSession(addr, context.Background(), &DefaultLogger{})
+		session := NewBaseSession(addr, context.Background(), &DefaultLogger{}, getTestConfig())
 
 		session.Cancel()
 		select {
@@ -59,7 +71,7 @@ func TestBaseSession(t *testing.T) {
 
 	t.Run("Data channel operations", func(t *testing.T) {
 		addr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
-		session := NewBaseSession(addr, context.Background(), &DefaultLogger{})
+		session := NewBaseSession(addr, context.Background(), &DefaultLogger{}, getTestConfig())
 
 		data := []byte("test data")
 		go func() {
