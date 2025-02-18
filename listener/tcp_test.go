@@ -12,11 +12,13 @@ import (
 )
 
 const (
-	tcpHost = "127.0.0.1"
-	tcpPort = 9000
+	tcpHost   = "127.0.0.1"
+	tcpHostV6 = "::1"
+	tcpPort   = 9000
+	tcpPortV6 = 9010
 )
 
-func TestTCPListener(t *testing.T) {
+func TestTCPListenerIPv4(t *testing.T) {
 	t.Run("Basic message exchange", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -292,6 +294,106 @@ func TestTCPListener(t *testing.T) {
 			t.Fatal("session not cleaned up after connection close")
 		}
 
+		if err := tListener.StopListener(); err != nil {
+			t.Fatal("stop:", err)
+		}
+	})
+}
+
+func TestTCPListenerIPv6(t *testing.T) {
+	t.Run("Basic IPv6 message exchange", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Create server with custom configuration
+		tListener, err := NewTCP(tcpHostV6, tcpPortV6, ctx,
+			WithMaxLength(1024),
+			WithBufferSize(100),
+			WithTimeouts(100*time.Millisecond, 100*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Set up session announcement
+		newSessionChan := make(chan Session)
+		tListener.SetAnnounceNewSession(utilityGetSessionTCP, newSessionChan)
+
+		// Start server
+		serverErrChan := make(chan error, 1)
+		go func() {
+			if err := tListener.StartListener(); err != nil {
+				serverErrChan <- err
+			}
+		}()
+
+		// Wait for server to start
+		time.Sleep(100 * time.Millisecond)
+
+		// Check for startup errors
+		select {
+		case err := <-serverErrChan:
+			t.Fatalf("server startup error: %v", err)
+		default:
+			// Server started successfully
+		}
+
+		// Connect client
+		conn, err := net.Dial("tcp6", fmt.Sprintf("[%s]:%d", tcpHostV6, tcpPortV6))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		// Test message exchange
+		want := []byte("Hello IPv6 World!")
+		length := uint32(len(want))
+		if err := binary.Write(conn, binary.BigEndian, length); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Write(want); err != nil {
+			t.Fatal(err)
+		}
+
+		// Get session and verify received message
+		var session Session
+		select {
+		case session = <-newSessionChan:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for session")
+		}
+
+		select {
+		case got := <-session.Data():
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("want: %s, got: %s", want, got)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for message")
+		}
+
+		// Test echo
+		if err := session.SendToClient(want); err != nil {
+			t.Fatal("echo:", err)
+		}
+
+		// Verify echo received
+		var gotLength uint32
+		if err := binary.Read(conn, binary.BigEndian, &gotLength); err != nil {
+			t.Fatal("read length:", err)
+		}
+		if gotLength != length {
+			t.Fatalf("length mismatch: want %d, got %d", length, gotLength)
+		}
+		got := make([]byte, gotLength)
+		if _, err := conn.Read(got); err != nil {
+			t.Fatal("read data:", err)
+		}
+		if !reflect.DeepEqual(want, got) {
+			t.Fatalf("echo want: %s, got: %s", want, got)
+		}
+
+		// Clean up
 		if err := tListener.StopListener(); err != nil {
 			t.Fatal("stop:", err)
 		}

@@ -167,7 +167,7 @@ func (w *WebSocketServer) handleConnections(rw http.ResponseWriter, req *http.Re
 
 // newSession creates a new WebSocket session
 func (w *WebSocketServer) newSession(conn *websocket.Conn) *WebSocketSession {
-	base := NewBaseSession(conn.RemoteAddr(), w.ctx, w.Logger) // Use server context
+	base := NewBaseSession(conn.RemoteAddr(), w.ctx, w.Logger, w.ServerConfig) // Use server context
 	base.ID = uuid.NewString()
 
 	session := &WebSocketSession{
@@ -338,23 +338,6 @@ func (s *WebSocketSession) SendToClient(data []byte) error {
 	}
 
 	return nil
-}
-
-// receiveBytes processes received WebSocket messages
-func (s *WebSocketSession) receiveBytes(data ...[]byte) {
-	s.updateLastReceived()
-	for _, d := range data {
-		if len(d) == 0 {
-			continue
-		}
-		select {
-		case s.DataChannel <- d:
-		case <-s.server.ctx.Done():
-			return
-		default:
-			s.server.Logger.Warn("Channel full, dropping message")
-		}
-	}
 }
 
 // CloseSession closes the WebSocket session and cleans up resources

@@ -20,11 +20,11 @@ type BaseSession struct {
 }
 
 // NewBaseSession creates a new base session with the given parameters
-func NewBaseSession(addr net.Addr, ctx context.Context, logger Logger) *BaseSession {
+func NewBaseSession(addr net.Addr, ctx context.Context, logger Logger, config *ServerConfig) *BaseSession {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	return &BaseSession{
 		ClientAddr:   addr,
-		DataChannel:  make(chan []byte, 100), // TODO: Make buffer size configurable
+		DataChannel:  make(chan []byte, config.BufferSize),
 		LastReceived: time.Now(),
 		ctx:          sessionCtx,
 		cancel:       cancel,

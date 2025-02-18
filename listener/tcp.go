@@ -15,7 +15,7 @@ import (
 
 // TCPServer implements a TCP streaming server with enhanced session management
 type TCPServer struct {
-	conn                   net.Listener
+	conn                   *net.TCPListener
 	addr                   string
 	announceMiddleware     AnnounceMiddlewareFunc
 	announceMiddlewareOpts any
@@ -37,12 +37,6 @@ type TCPSession struct {
 // GetLastRecieved maintains backward compatibility with the Session interface
 func (s *TCPSession) GetLastRecieved() time.Time {
 	return s.GetLastReceived()
-}
-
-// receiveBytes implements the Session interface
-func (s *TCPSession) receiveBytes(data ...[]byte) {
-	// TCP doesn't use the data parameter as it reads directly from the connection
-	// This method exists only to satisfy the Session interface
 }
 
 // NewTCP creates a new TCP server with the given configuration
@@ -71,7 +65,14 @@ func NewTCP(host string, port uint16, ctx context.Context, opts ...ServerOption)
 
 // StartListener begins accepting TCP connections
 func (t *TCPServer) StartListener() error {
-	conn, err := net.Listen("tcp", t.addr)
+	// Resolve address to support both IPv4 and IPv6
+	addr, err := net.ResolveTCPAddr("tcp", t.addr)
+	if err != nil {
+		return NewConnectionError("failed to resolve address", err)
+	}
+
+	// ListenTCP automatically handles both IPv4 and IPv6 if available
+	conn, err := net.ListenTCP("tcp", addr)
 	if err != nil {
 		return NewConnectionError("failed to start listener", err)
 	}
@@ -129,8 +130,8 @@ func (t *TCPServer) receiveStream() {
 				return
 			default:
 				// Set accept deadline to allow context cancellation
-				t.conn.(*net.TCPListener).SetDeadline(time.Now().Add(100 * time.Millisecond))
-				conn, err := t.conn.Accept()
+				t.conn.SetDeadline(time.Now().Add(100 * time.Millisecond))
+				conn, err := t.conn.AcceptTCP()
 				if err != nil {
 					if ne, ok := err.(net.Error); ok && ne.Timeout() {
 						continue // Deadline exceeded, try again
@@ -196,7 +197,7 @@ func (t *TCPServer) receiveStream() {
 
 // newSession creates a new TCP session
 func (t *TCPServer) newSession(addr net.Addr, conn net.Conn) *TCPSession {
-	base := NewBaseSession(addr, t.ctx, t.Logger) // Use server context
+	base := NewBaseSession(addr, t.ctx, t.Logger, t.ServerConfig) // Use server context
 	base.ID = uuid.NewString()
 
 	session := &TCPSession{

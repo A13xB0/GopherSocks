@@ -9,8 +9,6 @@ import (
 type Session interface {
 	//Sends to client
 	SendToClient(data []byte) error
-	//Recieve actual data from the client, data is only used in UDP
-	receiveBytes(data ...[]byte)
 	//Receive Data channel
 	Data() (DataFromClient chan []byte)
 	//Close Session
