@@ -241,15 +241,6 @@ func (u *UDPServer) handlePacket(addr net.Addr, data []byte) {
 		u.sessionsMutex.Unlock()
 	}
 
-	// Check session timeout
-	if exists {
-		if time.Since(session.GetLastRecieved()) > u.ReadTimeout {
-			u.Logger.Debug("Session timeout for %s", addr)
-			session.CloseSession()
-			return // Don't create a new session for timed out connections
-		}
-	}
-
 	// Process the packet in the session
 	if udpSession, ok := session.(*UDPSession); ok {
 		if !udpSession.processPacket(data) {
