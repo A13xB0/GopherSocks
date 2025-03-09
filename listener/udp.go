@@ -197,6 +197,9 @@ func (u *UDPServer) readPackets(readChan chan<- struct {
 				return
 			}
 
+			if n == 0 {
+				continue
+			}
 			// Make a copy of the data since buffer will be reused
 			data := make([]byte, n)
 			copy(data, buffer[:n])
