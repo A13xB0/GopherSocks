@@ -140,11 +140,12 @@ func (u *UDPServer) receiveStream() {
 					}
 					return
 				}
-
+				if n == 0 {
+					continue
+				}
 				// Make a copy of the data since buffer will be reused
 				data := make([]byte, n)
 				copy(data, buffer[:n])
-
 				select {
 				case readChan <- struct {
 					addr net.Addr
