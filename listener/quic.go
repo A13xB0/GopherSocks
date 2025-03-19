@@ -292,6 +292,9 @@ func (q *QUICServer) handleSession(session *QUICSession) {
 				}
 				return
 			}
+			if n == 0 {
+				continue
+			}
 
 			// Update last received time and send to channel
 			session.updateLastReceived()
