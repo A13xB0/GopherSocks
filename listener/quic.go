@@ -72,12 +72,20 @@ func NewQUIC(host string, port uint16, tlsConfig *tls.Config, ctx context.Contex
 
 // StartListener begins accepting QUIC connections
 func (q *QUICServer) StartListener() error {
-	listener, err := quic.ListenAddr(q.addr, q.tlsConfig, &quic.Config{})
+	q.Logger.Debug("Starting QUIC listener with config", "addr", q.addr, "tls", q.tlsConfig)
+	listener, err := quic.ListenAddr(q.addr, q.tlsConfig, &quic.Config{
+		KeepAlivePeriod:            30 * time.Second,
+		MaxIdleTimeout:             30 * time.Second,
+		MaxIncomingStreams:         1000,
+		MaxStreamReceiveWindow:     5000,
+		MaxConnectionReceiveWindow: 5000 * 1000,
+	})
 	if err != nil {
+		q.Logger.Error("Failed to start QUIC listener", "error", err)
 		return NewConnectionError("failed to start listener", err)
 	}
 	q.listener = listener
-	q.Logger.Info("QUIC server listening on %s", q.addr)
+	q.Logger.Debug("QUIC server listening", "addr", q.addr, "tls_config", fmt.Sprintf("%+v", q.tlsConfig))
 
 	go q.receiveStream()
 	return nil
@@ -163,6 +171,7 @@ func (q *QUICServer) receiveStream() {
 
 			// Create new session
 			session := q.newSession(accept.conn.RemoteAddr(), accept.conn, accept.stream)
+			q.Logger.Debug("Created new session", "session_id", session.GetSessionID(), "remote_addr", session.GetClientAddr())
 			q.sessionsMutex.Unlock()
 
 			go q.handleSession(session)
@@ -183,8 +192,10 @@ func (q *QUICServer) acceptConnections(acceptChan chan<- struct {
 		case <-q.ctx.Done():
 			return
 		default:
+			q.Logger.Debug("Waiting for QUIC connection")
 			conn, err := q.listener.Accept(q.ctx)
 			if err != nil {
+				q.Logger.Error("Failed to accept QUIC connection", "error", err)
 				select {
 				case errChan <- err:
 				case <-q.ctx.Done():
@@ -195,13 +206,16 @@ func (q *QUICServer) acceptConnections(acceptChan chan<- struct {
 				time.Sleep(100 * time.Millisecond) // Basic retry backoff
 				continue
 			}
+			q.Logger.Debug("Accepted QUIC connection", "remote_addr", conn.RemoteAddr())
 
+			q.Logger.Debug("Accepting QUIC stream")
 			stream, err := conn.AcceptStream(q.ctx)
 			if err != nil {
-				q.Logger.Error("Error accepting stream: %v", err)
+				q.Logger.Error("Failed to accept QUIC stream", "error", err, "connection", fmt.Sprintf("%+v", conn))
 				conn.CloseWithError(0, "failed to accept stream")
 				continue
 			}
+			q.Logger.Debug("Accepted QUIC stream", "stream_id", stream.StreamID())
 
 			select {
 			case acceptChan <- struct {
@@ -264,11 +278,16 @@ func (s *QUICSession) SendToClient(data []byte) error {
 		return NewProtocolError("message exceeds maximum length", nil)
 	}
 
+	s.server.Logger.Debug("Sending data to client", "bytes", len(data), "remote_addr", s.GetClientAddr())
+
 	// Write length prefix and data
-	if _, err := s.stream.Write(data); err != nil {
+	n, err := s.stream.Write(data)
+	if err != nil {
+		s.server.Logger.Error("Failed to write to stream", "error", err, "remote_addr", s.GetClientAddr())
 		return NewConnectionError("failed to write message", err)
 	}
 
+	s.server.Logger.Debug("Sent data to client", "bytes", n, "remote_addr", s.GetClientAddr())
 	return nil
 }
 
@@ -286,14 +305,15 @@ func (q *QUICServer) handleSession(session *QUICSession) {
 			n, err := session.stream.Read(buffer)
 			if err != nil {
 				if err == io.EOF {
-					q.Logger.Debug("Connection closed by client: %s", session.GetClientAddr())
+					q.Logger.Debug("Connection closed by client", "remote_addr", session.GetClientAddr())
 				} else {
-					q.Logger.Error("Error reading from stream: %v", err)
+					q.Logger.Error("Error reading from stream", "error", err, "remote_addr", session.GetClientAddr())
 				}
 				return
 			}
 
 			if n == 0 {
+				q.Logger.Debug("Read 0 bytes, continuing", "remote_addr", session.GetClientAddr())
 				continue
 			}
 
@@ -302,12 +322,15 @@ func (q *QUICServer) handleSession(session *QUICSession) {
 			data := make([]byte, n)
 			copy(data, buffer[:n])
 
+			q.Logger.Debug("Read data from stream", "bytes", n, "remote_addr", session.GetClientAddr())
+
 			select {
 			case session.DataChannel <- data:
+				q.Logger.Debug("Sent data to channel", "bytes", n, "remote_addr", session.GetClientAddr())
 			case <-q.ctx.Done():
 				return
 			default:
-				q.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
+				q.Logger.Warn("Channel full, dropping message", "remote_addr", session.GetClientAddr())
 			}
 		}
 	}()
