@@ -3,9 +3,15 @@ package gophersocks
 
 import (
 	"context"
+	"crypto/tls"
 
 	"github.com/A13xB0/GopherSocks/listener"
 )
+
+// QUICConfig holds QUIC-specific configuration
+type QUICConfig struct {
+	TLSConfig *tls.Config
+}
 
 // Listener defines the interface for streaming TCP and UDP connections
 type Listener interface {
@@ -69,6 +75,24 @@ func NewWebSocketListenerWithContext(host string, port uint16, ctx context.Conte
 	return listener.NewWebSocket(host, port, ctx, listenerOpts...)
 }
 
+// NewQUICListener creates a new QUIC stream handler
+func NewQUICListener(host string, port uint16, tlsConfig *tls.Config, opts ...ServerOptFunc) (Listener, error) {
+	return NewQUICListenerWithContext(host, port, tlsConfig, context.Background(), opts...)
+}
+
+// NewQUICListenerWithContext creates a new QUIC stream handler with context
+func NewQUICListenerWithContext(host string, port uint16, tlsConfig *tls.Config, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
+	config := convertToServerConfig(opts...)
+	// Set QUIC-specific configuration
+	if config.ProtocolConfig == nil {
+		config.ProtocolConfig = &QUICConfig{
+			TLSConfig: tlsConfig,
+		}
+	}
+	listenerOpts := convertToListenerOptions(opts)
+	return listener.NewQUIC(host, port, tlsConfig, ctx, listenerOpts...)
+}
+
 // convertToListenerOptions converts our ServerOptFunc options to listener.ServerOption options
 func convertToListenerOptions(opts []ServerOptFunc) []listener.ServerOption {
 	config := convertToServerConfig(opts...)
@@ -82,6 +106,14 @@ func convertToListenerOptions(opts []ServerOptFunc) []listener.ServerOption {
 		listener.WithTimeouts(config.ReadTimeout, config.WriteTimeout),
 		listener.WithMaxConnections(config.MaxConnections),
 	)
+
+	// Add protocol-specific options if needed in the future
+	if config.ProtocolConfig != nil {
+		switch config.ProtocolConfig.(type) {
+		case *QUICConfig:
+			// QUIC options can be added here if needed
+		}
+	}
 
 	return listenerOpts
 }
