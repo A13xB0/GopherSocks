@@ -42,7 +42,7 @@ func (s *QUICSession) GetLastRecieved() time.Time {
 }
 
 // NewQUIC creates a new QUIC server with the given configuration
-func NewQUIC(host string, port uint16, tlsConfig *tls.Config, ctx context.Context, opts ...ServerOption) (*QUICServer, error) {
+func NewQUIC(host string, port uint16, tlsConfig *tls.Config, ctx context.Context, opts ...ServerOption) (Listener, error) {
 	if tlsConfig == nil {
 		return nil, NewConfigError("TLS config is required for QUIC", nil)
 	}
@@ -87,25 +87,36 @@ func (q *QUICServer) StartListener() error {
 func (q *QUICServer) StopListener() error {
 	q.Logger.Info("Shutting down QUIC server")
 
+	// Close listener first to stop accepting new connections
+	if q.listener != nil {
+		if err := q.listener.Close(); err != nil {
+			q.Logger.Error("Error closing listener: %v", err)
+		}
+	}
+
+	// Close all active sessions before canceling context
+	q.sessionsMutex.Lock()
+	for _, session := range q.sessions {
+		s := session.(*QUICSession)
+		if s.stream != nil {
+			s.stream.Close()
+		}
+		if s.conn != nil {
+			s.conn.CloseWithError(0, "server shutdown")
+		}
+	}
+	q.sessionsMutex.Unlock()
+
 	// Cancel context to stop all goroutines
 	q.cancel()
-
-	// Close listener
-	if err := q.listener.Close(); err != nil {
-		q.Logger.Error("Error closing listener: %v", err)
-	}
 
 	// Wait for all goroutines to finish
 	q.wg.Wait()
 
-	// Close all active sessions
+	// Clean up remaining sessions
 	q.sessionsMutex.Lock()
-	for _, session := range q.sessions {
-		s := session.(*QUICSession)
-		s.stream.Close()
-		s.conn.CloseWithError(0, "server shutdown")
-		close(s.DataChannel)
-		delete(q.sessions, s.GetClientAddr().String())
+	for addr := range q.sessions {
+		delete(q.sessions, addr)
 	}
 	q.sessionsMutex.Unlock()
 
@@ -117,44 +128,90 @@ func (q *QUICServer) receiveStream() {
 	q.wg.Add(1)
 	defer q.wg.Done()
 
+	acceptChan := make(chan struct {
+		conn   quic.Connection
+		stream quic.Stream
+	}, q.BufferSize)
+	errChan := make(chan error, 1)
+
+	go q.acceptConnections(acceptChan, errChan)
+
 	for {
 		select {
 		case <-q.ctx.Done():
 			q.Logger.Info("Stopping QUIC receiver")
 			return
-		default:
-			conn, err := q.listener.Accept(q.ctx)
-			if err != nil {
-				if err == context.Canceled {
-					return
-				}
-				q.Logger.Error("Error accepting connection: %v", err)
-				continue
+		case err := <-errChan:
+			if err == context.Canceled {
+				return
 			}
-
+			q.Logger.Error("Error accepting connection: %v", err)
+			// Don't return on error, keep trying to accept new connections
+			continue
+		case accept, ok := <-acceptChan:
+			if !ok {
+				return // Channel closed
+			}
 			// Check max connections
 			q.sessionsMutex.Lock()
 			if len(q.sessions) >= q.MaxConnections {
 				q.sessionsMutex.Unlock()
-				q.Logger.Warn("Max connections reached, rejecting connection from %s", conn.RemoteAddr())
-				conn.CloseWithError(0, "max connections reached")
+				q.Logger.Warn("Max connections reached, rejecting connection from %s", accept.conn.RemoteAddr())
+				accept.conn.CloseWithError(0, "max connections reached")
 				continue
 			}
 
-			// Accept the first stream, which we'll use for data transfer
+			// Create new session
+			session := q.newSession(accept.conn.RemoteAddr(), accept.conn, accept.stream)
+			q.sessionsMutex.Unlock()
+
+			go q.handleSession(session)
+		}
+	}
+}
+
+// acceptConnections accepts new QUIC connections in a separate goroutine
+func (q *QUICServer) acceptConnections(acceptChan chan<- struct {
+	conn   quic.Connection
+	stream quic.Stream
+}, errChan chan<- error) {
+	defer close(acceptChan)
+	defer close(errChan)
+
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		default:
+			conn, err := q.listener.Accept(q.ctx)
+			if err != nil {
+				select {
+				case errChan <- err:
+				case <-q.ctx.Done():
+				}
+				if err == context.Canceled {
+					return
+				}
+				time.Sleep(100 * time.Millisecond) // Basic retry backoff
+				continue
+			}
+
 			stream, err := conn.AcceptStream(q.ctx)
 			if err != nil {
-				q.sessionsMutex.Unlock()
 				q.Logger.Error("Error accepting stream: %v", err)
 				conn.CloseWithError(0, "failed to accept stream")
 				continue
 			}
 
-			// Create new session
-			session := q.newSession(conn.RemoteAddr(), conn, stream)
-			q.sessionsMutex.Unlock()
-
-			go q.handleSession(session)
+			select {
+			case acceptChan <- struct {
+				conn   quic.Connection
+				stream quic.Stream
+			}{conn, stream}:
+			case <-q.ctx.Done():
+				conn.CloseWithError(0, "server shutdown")
+				return
+			}
 		}
 	}
 }
@@ -221,19 +278,18 @@ func (q *QUICServer) handleSession(session *QUICSession) {
 	defer q.wg.Done()
 	defer q.closeSession(session)
 
-	buffer := make([]byte, q.MaxLength)
-	for {
-		select {
-		case <-q.ctx.Done():
-			return
-		default:
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		buffer := make([]byte, q.MaxLength)
+		for {
 			n, err := session.stream.Read(buffer)
 			if err != nil {
 				if err == io.EOF {
 					q.Logger.Debug("Connection closed by client: %s", session.GetClientAddr())
-					return
+				} else {
+					q.Logger.Error("Error reading from stream: %v", err)
 				}
-				q.Logger.Error("Error reading from stream: %v", err)
 				return
 			}
 
@@ -250,32 +306,44 @@ func (q *QUICServer) handleSession(session *QUICSession) {
 				q.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
 			}
 		}
+	}()
+
+	select {
+	case <-q.ctx.Done():
+	case <-readDone:
 	}
 }
 
 // closeSession closes a QUIC session and cleans up resources
 func (q *QUICServer) closeSession(session *QUICSession) {
-	q.sessionsMutex.Lock()
-	defer q.sessionsMutex.Unlock()
+	addr := session.GetClientAddr().String()
 
-	// Check if session is already closed
-	if _, exists := q.sessions[session.GetClientAddr().String()]; !exists {
+	q.sessionsMutex.Lock()
+	if _, exists := q.sessions[addr]; !exists {
+		q.sessionsMutex.Unlock()
 		return
 	}
+	delete(q.sessions, addr)
+	q.sessionsMutex.Unlock()
 
 	session.Cancel()
-	session.stream.Close()
-	session.conn.CloseWithError(0, "session closed")
-
-	select {
-	case <-session.DataChannel:
-		// Drain any remaining messages
-	default:
+	if session.stream != nil {
+		session.stream.Close()
 	}
-	close(session.DataChannel)
+	if session.conn != nil {
+		session.conn.CloseWithError(0, "session closed")
+	}
 
-	delete(q.sessions, session.GetClientAddr().String())
-	q.Logger.Debug("Closed session for %s", session.GetClientAddr())
+	// Drain and close channel
+	for {
+		select {
+		case <-session.DataChannel:
+		default:
+			close(session.DataChannel)
+			q.Logger.Debug("Closed session for %s", session.GetClientAddr())
+			return
+		}
+	}
 }
 
 // CloseSession closes the QUIC session and cleans up resources
