@@ -2,7 +2,6 @@ package listener
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -84,16 +83,16 @@ type Logger interface {
 type DefaultLogger struct{}
 
 func (l *DefaultLogger) Debug(msg string, keysAndValues ...interface{}) {
-	fmt.Printf("DEBUG: %s %v\n", msg, keysAndValues)
+
 }
 func (l *DefaultLogger) Info(msg string, keysAndValues ...interface{}) {
-	fmt.Printf("INFO: %s %v\n", msg, keysAndValues)
+
 }
 func (l *DefaultLogger) Warn(msg string, keysAndValues ...interface{}) {
-	fmt.Printf("WARN: %s %v\n", msg, keysAndValues)
+
 }
 func (l *DefaultLogger) Error(msg string, keysAndValues ...interface{}) {
-	fmt.Printf("ERROR: %s %v\n", msg, keysAndValues)
+
 }
 
 // ServerOption defines a function type for configuring server options
