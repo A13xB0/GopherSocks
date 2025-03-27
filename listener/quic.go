@@ -1,10 +1,16 @@
 package listener
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"sync"
 	"time"
@@ -21,11 +27,23 @@ type QUICServer struct {
 	announceMiddlewareOpts any
 	sessions               map[string]Session
 	sessionsMutex          sync.RWMutex
-	wg                     sync.WaitGroup
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	tlsConfig              *tls.Config
+	quicConfig             *quic.Config
 	*ServerConfig
+}
+
+func (q *QUICServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, options any) {
+
+}
+
+func (q *QUICServer) GetActiveSessions() map[string]Session {
+
+}
+
+func (q *QUICServer) GetSession(ClientAddr string) Session {
+
 }
 
 // QUICSession represents an active QUIC connection
@@ -41,12 +59,18 @@ func (s *QUICSession) GetLastRecieved() time.Time {
 	return s.GetLastReceived()
 }
 
-// NewQUIC creates a new QUIC server with the given configuration
-func NewQUIC(host string, port uint16, tlsConfig *tls.Config, ctx context.Context, opts ...ServerOption) (Listener, error) {
-	if tlsConfig == nil {
-		return nil, NewConfigError("TLS config is required for QUIC", nil)
-	}
+func (s *QUICSession) SendToClient(data []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
 
+func (s *QUICSession) CloseSession() {
+	//TODO implement me
+	panic("implement me")
+}
+
+// NewQUIC creates a new QUIC server with the given configuration
+func NewQUIC(host string, port uint16, ctx context.Context, opts ...ServerOption) (Listener, error) {
 	config := defaultConfig()
 	for _, opt := range opts {
 		opt(config)
@@ -57,300 +81,150 @@ func NewQUIC(host string, port uint16, tlsConfig *tls.Config, ctx context.Contex
 	}
 
 	addr := fmt.Sprintf("%v:%v", host, port)
-	serverCtx, cancel := context.WithCancel(ctx)
-	server := &QUICServer{
-		addr:         addr,
-		ServerConfig: config,
-		sessions:     make(map[string]Session),
-		ctx:          serverCtx,
-		cancel:       cancel,
-		tlsConfig:    tlsConfig,
+	ctx, cancel := context.WithCancel(ctx)
+	quicConfig := quic.Config{
+		MaxIncomingStreams:    int64(config.MaxConnections),
+		MaxIncomingUniStreams: int64(config.MaxConnections),
+		//Allow0RTT: true,
 	}
-
-	return server, nil
+	//Todo: add option for tls config override
+	return &QUICServer{
+		addr:       addr,
+		ctx:        ctx,
+		cancel:     cancel,
+		sessions:   make(map[string]Session),
+		tlsConfig:  defaultTLSConfig(),
+		quicConfig: &quicConfig,
+	}, nil
 }
 
 // StartListener begins accepting QUIC connections
 func (q *QUICServer) StartListener() error {
-	listener, err := quic.ListenAddr(q.addr, q.tlsConfig, &quic.Config{})
+	addr, err := net.ResolveUDPAddr("udp", q.addr)
 	if err != nil {
-		return NewConnectionError("failed to start listener", err)
-	}
-	q.listener = listener
-	q.Logger.Info("QUIC server listening on %s", q.addr)
-
-	go q.receiveStream()
-	return nil
-}
-
-// StopListener gracefully shuts down the QUIC server
-func (q *QUICServer) StopListener() error {
-	q.Logger.Info("Shutting down QUIC server")
-
-	// Close listener first to stop accepting new connections
-	if q.listener != nil {
-		if err := q.listener.Close(); err != nil {
-			q.Logger.Error("Error closing listener: %v", err)
-		}
+		return NewConnectionError("failed to resolve address", err)
 	}
 
-	// Close all active sessions before canceling context
-	q.sessionsMutex.Lock()
-	for _, session := range q.sessions {
-		s := session.(*QUICSession)
-		if s.stream != nil {
-			s.stream.Close()
-		}
-		if s.conn != nil {
-			s.conn.CloseWithError(0, "server shutdown")
-		}
+	udpConn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return err
 	}
-	q.sessionsMutex.Unlock()
-
-	// Cancel context to stop all goroutines
-	q.cancel()
-
-	// Wait for all goroutines to finish
-	q.wg.Wait()
-
-	// Clean up remaining sessions
-	q.sessionsMutex.Lock()
-	for addr := range q.sessions {
-		delete(q.sessions, addr)
+	tr := quic.Transport{
+		Conn: udpConn,
 	}
-	q.sessionsMutex.Unlock()
+	q.listener, err = tr.Listen(q.tlsConfig, q.quicConfig)
+	if err != nil {
+		return err
+	}
+	go q.receiveConnections()
 
 	return nil
 }
 
-// receiveStream handles incoming QUIC connections
-func (q *QUICServer) receiveStream() {
-	q.wg.Add(1)
-	defer q.wg.Done()
-
-	acceptChan := make(chan struct {
-		conn   quic.Connection
-		stream quic.Stream
-	}, q.BufferSize)
-	errChan := make(chan error, 1)
-
-	go q.acceptConnections(acceptChan, errChan)
-
+func (q *QUICServer) receiveConnections() {
 	for {
-		select {
-		case <-q.ctx.Done():
-			q.Logger.Info("Stopping QUIC receiver")
-			return
-		case err := <-errChan:
-			if err == context.Canceled {
-				return
-			}
-			q.Logger.Error("Error accepting connection: %v", err)
-			// Don't return on error, keep trying to accept new connections
-			continue
-		case accept, ok := <-acceptChan:
-			if !ok {
-				return // Channel closed
-			}
-			// Check max connections
-			q.sessionsMutex.Lock()
-			if len(q.sessions) >= q.MaxConnections {
-				q.sessionsMutex.Unlock()
-				q.Logger.Warn("Max connections reached, rejecting connection from %s", accept.conn.RemoteAddr())
-				accept.conn.CloseWithError(0, "max connections reached")
-				continue
-			}
-
-			// Create new session
-			session := q.newSession(accept.conn.RemoteAddr(), accept.conn, accept.stream)
-			q.sessionsMutex.Unlock()
-
-			go q.handleSession(session)
+		conn, err := q.listener.Accept(q.ctx)
+		if err != nil {
+			q.Logger.Error("failed to accept stream", err)
 		}
+		session := q.newSession(conn)
+		go session.receiveStream()
 	}
 }
 
-// acceptConnections accepts new QUIC connections in a separate goroutine
-func (q *QUICServer) acceptConnections(acceptChan chan<- struct {
-	conn   quic.Connection
-	stream quic.Stream
-}, errChan chan<- error) {
-	defer close(acceptChan)
-	defer close(errChan)
-
-	for {
-		select {
-		case <-q.ctx.Done():
-			return
-		default:
-			conn, err := q.listener.Accept(q.ctx)
-			if err != nil {
-				select {
-				case errChan <- err:
-				case <-q.ctx.Done():
-				}
-				if err == context.Canceled {
-					return
-				}
-				time.Sleep(100 * time.Millisecond) // Basic retry backoff
-				continue
-			}
-
-			stream, err := conn.AcceptStream(q.ctx)
-			if err != nil {
-				q.Logger.Error("Error accepting stream: %v", err)
-				conn.CloseWithError(0, "failed to accept stream")
-				continue
-			}
-
-			select {
-			case acceptChan <- struct {
-				conn   quic.Connection
-				stream quic.Stream
-			}{conn, stream}:
-			case <-q.ctx.Done():
-				conn.CloseWithError(0, "server shutdown")
-				return
-			}
-		}
-	}
-}
-
-// newSession creates a new QUIC session
-func (q *QUICServer) newSession(addr net.Addr, conn quic.Connection, stream quic.Stream) *QUICSession {
-	base := NewBaseSession(addr, q.ctx, q.Logger, q.ServerConfig)
+func (q *QUICServer) newSession(conn quic.Connection) *QUICSession {
+	var err error
+	base := NewBaseSession(conn.RemoteAddr(), q.ctx, q.Logger, q.ServerConfig)
 	base.ID = uuid.NewString()
-
 	session := &QUICSession{
 		BaseSession: base,
 		server:      q,
 		conn:        conn,
-		stream:      stream,
+		stream:      nil,
 	}
-
-	q.sessions[addr.String()] = session
+	q.sessions[conn.RemoteAddr().String()] = session
 
 	if q.announceMiddleware != nil {
 		q.announceMiddleware(q.announceMiddlewareOpts, session)
 	}
 
+	session.stream, err = session.conn.AcceptStream(session.server.ctx)
+	if err != nil {
+		q.Logger.Error("failed to accept stream", err)
+	}
 	return session
 }
 
-func (q *QUICServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, options any) {
-	q.announceMiddleware = function
-	q.announceMiddlewareOpts = options
+func (q *QUICSession) receiveStream() {
+	buffer := make([]byte, 0)
+	delimiter := []byte("\n\n\n") // add this to config
+
+	for {
+		streamBytes := make([]byte, 1024) // Read in chunks
+		n, err := q.stream.Read(streamBytes)
+		if err != nil {
+			return
+		}
+
+		buffer = append(buffer, streamBytes[:n]...)
+
+		for {
+			index := bytes.Index(buffer, delimiter)
+			if index == -1 {
+				break
+			}
+
+			chunk := buffer[:index]
+			buffer = buffer[index+len(delimiter):]
+
+			// Process the chunk
+			processChunk(chunk)
+		}
+	}
 }
 
-func (q *QUICServer) GetActiveSessions() map[string]Session {
-	q.sessionsMutex.RLock()
-	defer q.sessionsMutex.RUnlock()
-	sessions := make(map[string]Session)
-	for k, v := range q.sessions {
-		sessions[k] = v
-	}
-	return sessions
-}
-
-func (q *QUICServer) GetSession(ClientAddr string) Session {
-	q.sessionsMutex.RLock()
-	defer q.sessionsMutex.RUnlock()
-	return q.sessions[ClientAddr]
-}
-
-// SendToClient sends data to the QUIC client
-func (s *QUICSession) SendToClient(data []byte) error {
-	if len(data) > int(s.server.MaxLength) {
-		return NewProtocolError("message exceeds maximum length", nil)
-	}
-
-	// Write length prefix and data
-	if _, err := s.stream.Write(data); err != nil {
-		return NewConnectionError("failed to write message", err)
-	}
+// StopListener gracefully shuts down the QUIC server
+func (q *QUICServer) StopListener() error {
 
 	return nil
 }
 
-// handleSession processes incoming data for a QUIC session
-func (q *QUICServer) handleSession(session *QUICSession) {
-	q.wg.Add(1)
-	defer q.wg.Done()
-	defer q.closeSession(session)
-
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		buffer := make([]byte, q.MaxLength)
-		for {
-			n, err := session.stream.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					q.Logger.Debug("Connection closed by client: %s", session.GetClientAddr())
-				} else {
-					q.Logger.Error("Error reading from stream: %v", err)
-				}
-				return
-			}
-
-			if n == 0 {
-				continue
-			}
-
-			// Update last received time and send to channel
-			session.updateLastReceived()
-			data := make([]byte, n)
-			copy(data, buffer[:n])
-
-			select {
-			case session.DataChannel <- data:
-			case <-q.ctx.Done():
-				return
-			default:
-				q.Logger.Warn("Channel full, dropping message from %s", session.GetClientAddr())
-			}
-		}
-	}()
-
-	select {
-	case <-q.ctx.Done():
-	case <-readDone:
-	}
-}
-
-// closeSession closes a QUIC session and cleans up resources
-func (q *QUICServer) closeSession(session *QUICSession) {
-	addr := session.GetClientAddr().String()
-
-	q.sessionsMutex.Lock()
-	if _, exists := q.sessions[addr]; !exists {
-		q.sessionsMutex.Unlock()
-		return
-	}
-	delete(q.sessions, addr)
-	q.sessionsMutex.Unlock()
-
-	session.Cancel()
-	if session.stream != nil {
-		session.stream.Close()
-	}
-	if session.conn != nil {
-		session.conn.CloseWithError(0, "session closed")
+func defaultTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
 	}
 
-	// Drain and close channel
-	for {
-		select {
-		case <-session.DataChannel:
-		default:
-			close(session.DataChannel)
-			q.Logger.Debug("Closed session for %s", session.GetClientAddr())
-			return
-		}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour * 24),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-}
 
-// CloseSession closes the QUIC session and cleans up resources
-func (s *QUICSession) CloseSession() {
-	s.server.closeSession(s)
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		panic(err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"gophersocks"},
+		MinVersion:   tls.VersionTLS13,
+	}
 }
