@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"sync"
@@ -35,7 +36,8 @@ type QUICServer struct {
 }
 
 func (q *QUICServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, options any) {
-
+	q.announceMiddleware = function
+	q.announceMiddlewareOpts = options
 }
 
 func (q *QUICServer) GetActiveSessions() map[string]Session {
@@ -101,13 +103,14 @@ func NewQUIC(host string, port uint16, ctx context.Context, opts ...ServerOption
 	}
 	//Todo: add option for tls config override
 	return &QUICServer{
-		addr:       addr,
-		ctx:        ctx,
-		cancel:     cancel,
-		sessions:   make(map[string]Session),
-		tlsConfig:  defaultTLSConfig(),
-		quicConfig: &quicConfig,
-		Delimeter:  []byte("\n\n\n"),
+		addr:         addr,
+		ctx:          ctx,
+		cancel:       cancel,
+		sessions:     make(map[string]Session),
+		tlsConfig:    defaultTLSConfig(),
+		quicConfig:   &quicConfig,
+		ServerConfig: config,
+		Delimeter:    []byte("\n\n\n"),
 	}, nil
 }
 
@@ -198,7 +201,14 @@ func (q *QUICSession) receiveStream() {
 		streamBytes := make([]byte, 1024) // Read in chunks
 		n, err := q.stream.Read(streamBytes)
 		if err != nil {
-			return
+			if err == io.EOF {
+				// Handle connection closed
+				fmt.Println("Connection closed")
+				q.server.closeSession(q)
+				return
+			} else {
+				q.server.Logger.Error("receive stream error", err)
+			}
 		}
 		if n == 0 {
 			continue
