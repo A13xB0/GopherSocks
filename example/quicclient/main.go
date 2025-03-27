@@ -10,8 +10,13 @@ import (
 )
 
 func main() {
-	// Create a new QUIC client
-	quicClient, err := gophersocks.NewQUICClient("localhost:8443")
+	// Create a new QUIC client with custom options
+	quicClient, err := gophersocks.NewQUICClient("localhost:8443",
+		gophersocks.WithClientBufferSize(2048),
+		gophersocks.WithClientTimeouts(time.Second*30, time.Second*30),
+		gophersocks.WithQUICInsecureSkipVerify(true),
+		gophersocks.WithQUICNextProtos([]string{"gophersocks"}),
+	)
 	if err != nil {
 		log.Fatal("Failed to create QUIC client:", err)
 	}

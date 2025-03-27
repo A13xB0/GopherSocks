@@ -11,22 +11,6 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-// Options represents client configuration options
-type Options struct {
-	// Delimiter is used to frame messages (default: "\n\n\n")
-	Delimiter []byte
-}
-
-// Option is a function that configures Options
-type Option func(*Options)
-
-// WithDelimiter sets the message delimiter
-func WithDelimiter(delimiter []byte) Option {
-	return func(o *Options) {
-		o.Delimiter = delimiter
-	}
-}
-
 // QUICClient implements a QUIC connection client
 type QUICClient struct {
 	conn      quic.Connection
@@ -34,27 +18,34 @@ type QUICClient struct {
 	addr      string
 	delimiter []byte
 	buffer    []byte
+	config    *ClientConfig
 }
 
 // NewQUICClient creates a new QUIC client with the given address
-func NewQUICClient(addr string, opts *Options) (*QUICClient, error) {
+func NewQUICClient(addr string, config *ClientConfig) (*QUICClient, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("address is required")
 	}
 
 	return &QUICClient{
 		addr:      addr,
-		delimiter: opts.Delimiter,
+		delimiter: config.Delimiter,
 		buffer:    make([]byte, 0),
+		config:    config,
 	}, nil
 }
 
 // Connect establishes a QUIC connection
 func (c *QUICClient) Connect(ctx context.Context) error {
+	quicConfig, ok := c.config.ProtocolConfig.(*QUICConfig)
+	if !ok {
+		quicConfig = DefaultConfig().ProtocolConfig.(*QUICConfig)
+	}
+
 	tlsConf := &tls.Config{
-		NextProtos:         []string{"gophersocks"},
-		InsecureSkipVerify: true, // For testing, should be configurable
-		MinVersion:         tls.VersionTLS13,
+		NextProtos:         quicConfig.NextProtos,
+		InsecureSkipVerify: quicConfig.InsecureSkipVerify,
+		MinVersion:         quicConfig.MinVersion,
 	}
 
 	conn, err := quic.DialAddr(ctx, c.addr, tlsConf, &quic.Config{})
@@ -102,6 +93,9 @@ func (c *QUICClient) Receive() ([]byte, error) {
 			return nil, io.EOF
 		}
 		return nil, fmt.Errorf("failed to read from QUIC stream: %w", err)
+	}
+	if n == 0 {
+		return nil, nil
 	}
 
 	c.buffer = append(c.buffer, chunk[:n]...)

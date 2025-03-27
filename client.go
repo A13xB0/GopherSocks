@@ -29,14 +29,12 @@ type Client interface {
 	RemoteAddr() net.Addr
 }
 
-// NewQUICClient creates a new QUIC client with the given address
-func NewQUICClient(addr string) (Client, error) {
+// NewQUICClient creates a new QUIC client with the given address and options
+func NewQUICClient(addr string, opts ...ClientOptFunc) (Client, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("address is required")
 	}
 
-	opts := &client.Options{
-		Delimiter: []byte("\n\n\n"), // Default delimiter matching server
-	}
-	return client.NewQUICClient(addr, opts)
+	config := NewClientConfig(opts...)
+	return client.NewQUICClient(addr, config)
 }
