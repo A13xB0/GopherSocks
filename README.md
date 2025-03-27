@@ -2,7 +2,7 @@
 
 **This is being developed just for fun, no support will be given, not everything will work consistently, the Go code may be shakey**
 
-GopherSocks is a networking library for Go that provides TCP, UDP, and WebSocket servers with advanced session management capabilities. It's designed for building robust network applications with support for multiple protocols and efficient connection handling.
+GopherSocks is a networking library for Go that provides TCP, UDP, WebSocket, and QUIC servers with advanced session management capabilities. It's designed for building robust network applications with support for multiple protocols and efficient connection handling.
 
 ## Features
 
@@ -12,6 +12,15 @@ GopherSocks is a networking library for Go that provides TCP, UDP, and WebSocket
   - Automatic message validation
   - Configurable buffer sizes
   - Built-in connection management
+
+- **QUIC Server**
+  - Stream-based multiplexing with QUIC-go
+  - Built-in TLS 1.3 encryption with auto-generated certificates
+  - 2-byte length-prefixed message framing
+  - Triple newline delimiter (\n\n\n)
+  - Automatic stream management
+  - Low-latency transport
+  - Support for multiple concurrent streams
 
 - **UDP Server**
   - Automatic session management
@@ -306,6 +315,67 @@ func main() {
 }
 ```
 
+### QUIC Server
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "os/signal"
+    "syscall"
+
+    gophersocks "github.com/A13xB0/GopherSocks"
+)
+
+func main() {
+    // Create QUIC server (auto-generates TLS certificate)
+    server, err := gophersocks.NewQUICListener(
+        "0.0.0.0",
+        8004,
+        gophersocks.WithMaxLength(10000),      // Max message size
+        gophersocks.WithBufferSize(100),       // Stream buffer size
+        gophersocks.WithTimeouts(30, 30),      // 30 second timeouts
+        gophersocks.WithMaxConnections(1000),  // Max concurrent streams
+    )
+    if err != nil {
+        fmt.Printf("Failed to create server: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Handle new streams
+    server.SetAnnounceNewSession(func(options any, session gophersocks.Session) {
+        fmt.Printf("New QUIC stream from %v\n", session.GetClientAddr())
+        
+        go func() {
+            for data := range session.Data() {
+                // Echo message back on stream
+                if err := session.SendToClient(data); err != nil {
+                    fmt.Printf("Send error: %v\n", err)
+                    return
+                }
+            }
+        }()
+    }, nil)
+
+    // Start server
+    fmt.Printf("QUIC server listening on quic://0.0.0.0:8004\n")
+    if err := server.StartListener(); err != nil {
+        fmt.Printf("Failed to start: %v\n", err)
+        os.Exit(1)
+    }
+
+    // Wait for interrupt
+    sig := make(chan os.Signal, 1)
+    signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+    <-sig
+
+    // Graceful shutdown
+    server.StopListener()
+}
+```
+
 ### WebSocket Server
 
 ```go
@@ -397,6 +467,18 @@ WithWebSocketBufferSizes(readSize, writeSize int)
 WithWebSocketPath(path string)
 ```
 
+### QUIC Options
+```go
+// Set QUIC TLS configuration (defaults to auto-generated certificate)
+WithTLSConfig(config *tls.Config)
+
+// Set QUIC-specific configuration
+WithQUICConfig(config *quic.Config)
+
+// Set custom delimiter (default: "\n\n\n")
+WithDelimiter(delimiter []byte)
+```
+
 ## Session Interface
 
 The Session interface provides methods for handling network connections:
@@ -436,6 +518,8 @@ See the `example/` directory for complete working examples:
 - `example/tcplistener/`: TCP echo server
 - `example/udplistener/`: UDP echo server with session timeout
 - `example/wslistener/`: WebSocket echo server
+- `example/quiclistener/`: QUIC echo server with TLS
+- `example/quicclient/`: QUIC client example
 
 ## Contributing
 
