@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"sync"
@@ -29,8 +28,9 @@ type QUICServer struct {
 	sessionsMutex          sync.RWMutex
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	tlsConfig              *tls.Config
-	quicConfig             *quic.Config
+	tlsConfig              *tls.Config  //todo: move to serverconfig opts
+	quicConfig             *quic.Config //todo: move to server config opts
+	Delimeter              []byte       //todo: move to server config opts
 	*ServerConfig
 }
 
@@ -39,11 +39,19 @@ func (q *QUICServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, opti
 }
 
 func (q *QUICServer) GetActiveSessions() map[string]Session {
-
+	q.sessionsMutex.RLock()
+	defer q.sessionsMutex.RUnlock()
+	sessions := make(map[string]Session)
+	for k, v := range q.sessions {
+		sessions[k] = v
+	}
+	return sessions
 }
 
 func (q *QUICServer) GetSession(ClientAddr string) Session {
-
+	q.sessionsMutex.RLock()
+	defer q.sessionsMutex.RUnlock()
+	return q.sessions[ClientAddr]
 }
 
 // QUICSession represents an active QUIC connection
@@ -60,13 +68,17 @@ func (s *QUICSession) GetLastRecieved() time.Time {
 }
 
 func (s *QUICSession) SendToClient(data []byte) error {
-	//TODO implement me
-	panic("implement me")
+	delimiter := s.server.Delimeter
+	sData := append(data, delimiter...)
+	_, err := s.stream.Write(sData)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *QUICSession) CloseSession() {
-	//TODO implement me
-	panic("implement me")
+	s.server.closeSession(s)
 }
 
 // NewQUIC creates a new QUIC server with the given configuration
@@ -95,7 +107,27 @@ func NewQUIC(host string, port uint16, ctx context.Context, opts ...ServerOption
 		sessions:   make(map[string]Session),
 		tlsConfig:  defaultTLSConfig(),
 		quicConfig: &quicConfig,
+		Delimeter:  []byte("\n\n\n"),
 	}, nil
+}
+
+func (q *QUICServer) closeSession(session *QUICSession) {
+	q.sessionsMutex.Lock()
+	defer q.sessionsMutex.Unlock()
+	// Check if session is already closed
+	if _, exists := q.sessions[session.GetClientAddr().String()]; !exists {
+		return
+	}
+	_ = session.stream.Close()
+	session.BaseSession.Cancel()
+	select {
+	case <-session.DataChannel:
+		// Drain any remaining messages
+	default:
+	}
+	close(session.DataChannel)
+	delete(q.sessions, session.GetClientAddr().String())
+	q.Logger.Debug("Closed session for %s", session.GetClientAddr())
 }
 
 // StartListener begins accepting QUIC connections
@@ -126,6 +158,7 @@ func (q *QUICServer) receiveConnections() {
 		conn, err := q.listener.Accept(q.ctx)
 		if err != nil {
 			q.Logger.Error("failed to accept stream", err)
+			continue
 		}
 		session := q.newSession(conn)
 		go session.receiveStream()
@@ -142,29 +175,35 @@ func (q *QUICServer) newSession(conn quic.Connection) *QUICSession {
 		conn:        conn,
 		stream:      nil,
 	}
+	q.sessionsMutex.Lock()
 	q.sessions[conn.RemoteAddr().String()] = session
-
-	if q.announceMiddleware != nil {
-		q.announceMiddleware(q.announceMiddlewareOpts, session)
-	}
+	q.sessionsMutex.Unlock()
 
 	session.stream, err = session.conn.AcceptStream(session.server.ctx)
 	if err != nil {
 		q.Logger.Error("failed to accept stream", err)
 	}
+
+	if q.announceMiddleware != nil {
+		q.announceMiddleware(q.announceMiddlewareOpts, session)
+	}
+
 	return session
 }
 
 func (q *QUICSession) receiveStream() {
 	buffer := make([]byte, 0)
-	delimiter := []byte("\n\n\n") // add this to config
-
+	delimiter := q.server.Delimeter
 	for {
 		streamBytes := make([]byte, 1024) // Read in chunks
 		n, err := q.stream.Read(streamBytes)
 		if err != nil {
 			return
 		}
+		if n == 0 {
+			continue
+		}
+		q.updateLastReceived()
 
 		buffer = append(buffer, streamBytes[:n]...)
 
@@ -178,14 +217,19 @@ func (q *QUICSession) receiveStream() {
 			buffer = buffer[index+len(delimiter):]
 
 			// Process the chunk
-			processChunk(chunk)
+			q.DataChannel <- chunk
 		}
 	}
 }
 
 // StopListener gracefully shuts down the QUIC server
 func (q *QUICServer) StopListener() error {
-
+	q.Logger.Info("Shutting down UDP server")
+	err := q.listener.Close()
+	if err != nil {
+		return err
+	}
+	q.cancel()
 	return nil
 }
 
