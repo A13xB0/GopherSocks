@@ -38,3 +38,13 @@ func NewQUICClient(addr string, opts ...ClientOptFunc) (Client, error) {
 	config := NewClientConfig(opts...)
 	return client.NewQUICClient(addr, config)
 }
+
+// NewUDPClient creates a new UDP client with the given address and options
+func NewUDPClient(addr string, opts ...ClientOptFunc) (Client, error) {
+	if addr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	config := NewClientConfig(opts...)
+	return client.NewUDPClient(addr, config)
+}

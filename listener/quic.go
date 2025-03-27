@@ -69,8 +69,17 @@ func (s *QUICSession) GetLastRecieved() time.Time {
 func (s *QUICSession) SendToClient(data []byte) error {
 	quicConfig := s.server.ServerConfig.ProtocolConfig.(*QUICConfig)
 	delimiter := quicConfig.Delimiter
-	sData := append(data, delimiter...)
-	_, err := s.stream.Write(sData)
+
+	dataLen := len(data)
+	if dataLen > 10000 {
+		return fmt.Errorf("data length exceeds maximum of 10000 bytes")
+	}
+
+	// Format: data + 2-byte length + delimiter
+	lengthBytes := []byte{byte(dataLen >> 8), byte(dataLen)}
+	framedData := append(data, lengthBytes...)
+	framedData = append(framedData, delimiter...)
+	_, err := s.stream.Write(framedData)
 	if err != nil {
 		return err
 	}
@@ -199,38 +208,84 @@ func (q *QUICSession) receiveStream() {
 	buffer := make([]byte, 0)
 	quicConfig := q.server.ServerConfig.ProtocolConfig.(*QUICConfig)
 	delimiter := quicConfig.Delimiter
+	streamBytes := make([]byte, 1024)
+
 	for {
-		streamBytes := make([]byte, 1024) // Read in chunks
+		// Try to process any complete messages in the buffer
+		for {
+			// Look for delimiter
+			delimiterIndex := bytes.Index(buffer, delimiter)
+			if delimiterIndex == -1 {
+				break // No delimiter found, need more data
+			}
+
+			// Need at least 2 bytes before delimiter for length
+			if delimiterIndex < 2 {
+				// Invalid format, remove up to delimiter and continue
+				buffer = buffer[delimiterIndex+len(delimiter):]
+				continue
+			}
+
+			// Extract the 2-byte length
+			lengthBytes := buffer[delimiterIndex-2 : delimiterIndex]
+			length := int(lengthBytes[0])<<8 | int(lengthBytes[1])
+
+			// Verify length is within bounds
+			if length <= 0 || length > 10000 {
+				// Invalid length, remove up to delimiter and continue
+				buffer = buffer[delimiterIndex+len(delimiter):]
+				continue
+			}
+
+			// Verify we have enough data
+			messageStart := delimiterIndex - 2 - length
+			if messageStart < 0 {
+				break // Need more data
+			}
+
+			// Extract the message
+			message := buffer[messageStart : delimiterIndex-2]
+			// Remove processed data including delimiter
+			buffer = buffer[delimiterIndex+len(delimiter):]
+			q.updateLastReceived()
+			q.DataChannel <- message
+			continue
+		}
+
+		// Read more data
 		n, err := q.stream.Read(streamBytes)
 		if err != nil {
 			if err == io.EOF {
-				// Handle connection closed
+				// If we have remaining data, try to process it
+				if len(buffer) > 0 {
+					delimiterIndex := bytes.Index(buffer, delimiter)
+					if delimiterIndex != -1 && delimiterIndex >= 2 {
+						lengthBytes := buffer[delimiterIndex-2 : delimiterIndex]
+						length := int(lengthBytes[0])<<8 | int(lengthBytes[1])
+						if length > 0 && length <= 10000 {
+							messageStart := delimiterIndex - 2 - length
+							if messageStart >= 0 {
+								message := buffer[messageStart : delimiterIndex-2]
+								q.updateLastReceived()
+								q.DataChannel <- message
+							}
+						}
+					}
+				}
 				fmt.Println("Connection closed")
 				q.server.closeSession(q)
 				return
-			} else {
-				q.server.Logger.Error("receive stream error", err)
 			}
+			fmt.Println("Connection closed")
+			q.server.closeSession(q)
+			q.server.Logger.Error("receive stream error", err)
+			return
 		}
 		if n == 0 {
 			continue
 		}
-		q.updateLastReceived()
 
 		buffer = append(buffer, streamBytes[:n]...)
-
-		for {
-			index := bytes.Index(buffer, delimiter)
-			if index == -1 {
-				break
-			}
-
-			chunk := buffer[:index]
-			buffer = buffer[index+len(delimiter):]
-
-			// Process the chunk
-			q.DataChannel <- chunk
-		}
 	}
 }
 
