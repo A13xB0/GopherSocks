@@ -76,19 +76,27 @@ func (s *BaseSession) Cancel() {
 
 // Logger defines the interface for logging operations
 type Logger interface {
-	Debug(msg string, args ...interface{})
-	Info(msg string, args ...interface{})
-	Warn(msg string, args ...interface{})
-	Error(msg string, args ...interface{})
+	Debug(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...interface{})
+	Warn(msg string, keysAndValues ...interface{})
+	Error(msg string, keysAndValues ...interface{})
 }
 
 // DefaultLogger provides a basic implementation of the Logger interface
 type DefaultLogger struct{}
 
-func (l *DefaultLogger) Debug(msg string, args ...interface{}) {}
-func (l *DefaultLogger) Info(msg string, args ...interface{})  {}
-func (l *DefaultLogger) Warn(msg string, args ...interface{})  {}
-func (l *DefaultLogger) Error(msg string, args ...interface{}) {}
+func (l *DefaultLogger) Debug(msg string, keysAndValues ...interface{}) {
+
+}
+func (l *DefaultLogger) Info(msg string, keysAndValues ...interface{}) {
+
+}
+func (l *DefaultLogger) Warn(msg string, keysAndValues ...interface{}) {
+
+}
+func (l *DefaultLogger) Error(msg string, keysAndValues ...interface{}) {
+
+}
 
 // ServerOption defines a function type for configuring server options
 type ServerOption func(*ServerConfig)
