@@ -14,7 +14,7 @@ import (
 func main() {
 	// Setup Listener with configuration
 	host := "0.0.0.0"
-	port := uint16(8001)
+	port := uint16(8002)
 
 	// Create UDP listener with custom configuration
 	udpListener, err := gophersocks.NewUDPListener(
@@ -45,6 +45,7 @@ func main() {
 		fmt.Printf("Failed to start listener: %v\n", err)
 		os.Exit(1)
 	}
+	select {}
 }
 
 // handleSession processes datagrams for a UDP session
