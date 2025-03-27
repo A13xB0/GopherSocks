@@ -2,9 +2,12 @@ package listener
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/quic-go/quic-go"
 )
 
 // BaseSession provides common session functionality for all protocol implementations
@@ -97,6 +100,13 @@ type WebSocketConfig struct {
 	Path            string
 }
 
+// QUICConfig holds QUIC-specific configuration
+type QUICConfig struct {
+	TLSConfig  *tls.Config
+	QUICConfig *quic.Config
+	Delimiter  []byte
+}
+
 // ServerConfig holds common configuration for all protocol servers
 type ServerConfig struct {
 	MaxLength      uint32
@@ -122,6 +132,7 @@ func defaultConfig() *ServerConfig {
 			WriteBufferSize: 1024,
 			Path:            "/ws",
 		},
+		// Default QUIC configuration will be set in NewQUIC
 	}
 }
 
@@ -176,6 +187,33 @@ func WithWebSocketPath(path string) ServerOption {
 	return func(config *ServerConfig) {
 		if wsConfig, ok := config.ProtocolConfig.(*WebSocketConfig); ok {
 			wsConfig.Path = path
+		}
+	}
+}
+
+// WithTLSConfig sets the TLS configuration for QUIC
+func WithTLSConfig(tlsConfig *tls.Config) ServerOption {
+	return func(config *ServerConfig) {
+		if quicConfig, ok := config.ProtocolConfig.(*QUICConfig); ok {
+			quicConfig.TLSConfig = tlsConfig
+		}
+	}
+}
+
+// WithQUICConfig sets the QUIC configuration
+func WithQUICConfig(quicConfig *quic.Config) ServerOption {
+	return func(config *ServerConfig) {
+		if qConfig, ok := config.ProtocolConfig.(*QUICConfig); ok {
+			qConfig.QUICConfig = quicConfig
+		}
+	}
+}
+
+// WithQUICDelimiter sets the delimiter for QUIC messages
+func WithQUICDelimiter(delimiter []byte) ServerOption {
+	return func(config *ServerConfig) {
+		if quicConfig, ok := config.ProtocolConfig.(*QUICConfig); ok {
+			quicConfig.Delimiter = delimiter
 		}
 	}
 }

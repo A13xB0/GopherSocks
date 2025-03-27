@@ -29,9 +29,6 @@ type QUICServer struct {
 	sessionsMutex          sync.RWMutex
 	ctx                    context.Context
 	cancel                 context.CancelFunc
-	tlsConfig              *tls.Config  //todo: move to serverconfig opts
-	quicConfig             *quic.Config //todo: move to server config opts
-	Delimeter              []byte       //todo: move to server config opts
 	*ServerConfig
 }
 
@@ -70,7 +67,8 @@ func (s *QUICSession) GetLastRecieved() time.Time {
 }
 
 func (s *QUICSession) SendToClient(data []byte) error {
-	delimiter := s.server.Delimeter
+	quicConfig := s.server.ServerConfig.ProtocolConfig.(*QUICConfig)
+	delimiter := quicConfig.Delimiter
 	sData := append(data, delimiter...)
 	_, err := s.stream.Write(sData)
 	if err != nil {
@@ -86,6 +84,16 @@ func (s *QUICSession) CloseSession() {
 // NewQUIC creates a new QUIC server with the given configuration
 func NewQUIC(host string, port uint16, ctx context.Context, opts ...ServerOption) (Listener, error) {
 	config := defaultConfig()
+	// Set default QUIC configuration
+	config.ProtocolConfig = &QUICConfig{
+		TLSConfig: defaultTLSConfig(),
+		QUICConfig: &quic.Config{
+			MaxIncomingStreams:    int64(config.MaxConnections),
+			MaxIncomingUniStreams: int64(config.MaxConnections),
+		},
+		Delimiter: []byte("\n\n\n"),
+	}
+
 	for _, opt := range opts {
 		opt(config)
 	}
@@ -96,21 +104,13 @@ func NewQUIC(host string, port uint16, ctx context.Context, opts ...ServerOption
 
 	addr := fmt.Sprintf("%v:%v", host, port)
 	ctx, cancel := context.WithCancel(ctx)
-	quicConfig := quic.Config{
-		MaxIncomingStreams:    int64(config.MaxConnections),
-		MaxIncomingUniStreams: int64(config.MaxConnections),
-		//Allow0RTT: true,
-	}
-	//Todo: add option for tls config override
+
 	return &QUICServer{
 		addr:         addr,
 		ctx:          ctx,
 		cancel:       cancel,
 		sessions:     make(map[string]Session),
-		tlsConfig:    defaultTLSConfig(),
-		quicConfig:   &quicConfig,
 		ServerConfig: config,
-		Delimeter:    []byte("\n\n\n"),
 	}, nil
 }
 
@@ -147,7 +147,8 @@ func (q *QUICServer) StartListener() error {
 	tr := quic.Transport{
 		Conn: udpConn,
 	}
-	q.listener, err = tr.Listen(q.tlsConfig, q.quicConfig)
+	quicConfig := q.ServerConfig.ProtocolConfig.(*QUICConfig)
+	q.listener, err = tr.Listen(quicConfig.TLSConfig, quicConfig.QUICConfig)
 	if err != nil {
 		return err
 	}
@@ -196,7 +197,8 @@ func (q *QUICServer) newSession(conn quic.Connection) *QUICSession {
 
 func (q *QUICSession) receiveStream() {
 	buffer := make([]byte, 0)
-	delimiter := q.server.Delimeter
+	quicConfig := q.server.ServerConfig.ProtocolConfig.(*QUICConfig)
+	delimiter := quicConfig.Delimiter
 	for {
 		streamBytes := make([]byte, 1024) // Read in chunks
 		n, err := q.stream.Read(streamBytes)
