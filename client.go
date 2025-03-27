@@ -1,6 +1,42 @@
 package gophersocks
 
+import (
+	"context"
+	"fmt"
+	"net"
+
+	"github.com/A13xB0/GopherSocks/client"
+)
+
+// Client defines the interface for all client implementations
 type Client interface {
-	Connect() error
-	SendToServer()
+	// Connect establishes a connection to the server
+	Connect(ctx context.Context) error
+
+	// Send sends data to the server
+	Send(data []byte) error
+
+	// Receive receives data from the server
+	Receive() ([]byte, error)
+
+	// Close closes the client connection
+	Close() error
+
+	// LocalAddr returns the local network address
+	LocalAddr() net.Addr
+
+	// RemoteAddr returns the remote network address
+	RemoteAddr() net.Addr
+}
+
+// NewQUICClient creates a new QUIC client with the given address
+func NewQUICClient(addr string) (Client, error) {
+	if addr == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	opts := &client.Options{
+		Delimiter: []byte("\n\n\n"), // Default delimiter matching server
+	}
+	return client.NewQUICClient(addr, opts)
 }
