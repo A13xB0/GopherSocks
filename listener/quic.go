@@ -79,7 +79,12 @@ func (s *QUICSession) SendToClient(data []byte) error {
 	lengthBytes := []byte{byte(dataLen >> 8), byte(dataLen)}
 	framedData := append(data, lengthBytes...)
 	framedData = append(framedData, delimiter...)
-	_, err := s.stream.Write(framedData)
+	err := s.stream.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	if err != nil {
+		return err
+	}
+	_, err = s.stream.Write(framedData)
+
 	if err != nil {
 		s.CloseSession()
 		return err
