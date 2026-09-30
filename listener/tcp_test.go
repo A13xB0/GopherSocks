@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 const (
 	tcpHost   = "127.0.0.1"
 	tcpHostV6 = "::1" // IPv6 loopback address
-	tcpPort   = 9000
-	tcpPortV6 = 9010
+)
+
+var (
+	tcpPort   = testBasePort
+	tcpPortV6 = testBasePort + 10
 )
 
 // setupTCPListener creates and starts a TCP listener with the given options
@@ -65,7 +69,7 @@ func TestTCPListenerIPv4(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Connect client
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort))
+		conn, err := net.Dial("tcp", net.JoinHostPort(tcpHost, strconv.Itoa(int(tcpPort))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +136,7 @@ func TestTCPListenerIPv4(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Create and immediately close a connection
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+3))
+		conn, err := net.Dial("tcp", net.JoinHostPort(tcpHost, strconv.Itoa(int(tcpPort+3))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +172,7 @@ func TestTCPListenerIPv4(t *testing.T) {
 		numClients := 3
 		conns := make([]net.Conn, numClients)
 		for i := 0; i < numClients; i++ {
-			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+4))
+			conn, err := net.Dial("tcp", net.JoinHostPort(tcpHost, strconv.Itoa(int(tcpPort+4))))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +217,7 @@ func TestTCPListenerIPv4(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Connect client
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", tcpHost, tcpPort+5))
+		conn, err := net.Dial("tcp", net.JoinHostPort(tcpHost, strconv.Itoa(int(tcpPort+5))))
 		if err != nil {
 			t.Fatal(err)
 		}

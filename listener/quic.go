@@ -57,8 +57,8 @@ func (q *QUICServer) GetSession(ClientAddr string) Session {
 type QUICSession struct {
 	*BaseSession
 	server *QUICServer
-	conn   quic.Connection
-	stream quic.Stream
+	conn   *quic.Conn
+	stream *quic.Stream
 }
 
 // GetLastRecieved maintains backward compatibility with the Session interface
@@ -184,7 +184,7 @@ func (q *QUICServer) receiveConnections() {
 	}
 }
 
-func (q *QUICServer) newSession(conn quic.Connection) *QUICSession {
+func (q *QUICServer) newSession(conn *quic.Conn) *QUICSession {
 	var err error
 	base := NewBaseSession(conn.RemoteAddr(), q.ctx, q.Logger, q.ServerConfig)
 	base.ID = uuid.NewString()

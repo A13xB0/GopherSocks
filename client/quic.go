@@ -13,8 +13,8 @@ import (
 
 // QUICClient implements a QUIC connection client
 type QUICClient struct {
-	conn      quic.Connection
-	stream    quic.Stream
+	conn      *quic.Conn
+	stream    *quic.Stream
 	addr      string
 	delimiter []byte
 	buffer    []byte
