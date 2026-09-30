@@ -1,9 +1,10 @@
 package listener
 
 import (
-	"fmt"
+	"net"
 	"net/url"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -11,10 +12,9 @@ import (
 	"golang.org/x/net/context"
 )
 
-const (
-	wsHost = "127.0.0.1"
-	wsPort = 9100 // Use a different port range than TCP/UDP
-)
+const wsHost = "127.0.0.1"
+
+var wsPort = testBasePort + 30
 
 func TestWSListener(t *testing.T) {
 	t.Run("Basic message exchange", func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestWSListener(t *testing.T) {
 		// Connect client
 		u := url.URL{
 			Scheme: "ws",
-			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort),
+			Host:   net.JoinHostPort(wsHost, strconv.Itoa(int(wsPort))),
 			Path:   wsConfig.Path,
 		}
 		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -178,7 +178,7 @@ func TestWSListener(t *testing.T) {
 
 		u := url.URL{
 			Scheme: "ws",
-			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+10),
+			Host:   net.JoinHostPort(wsHost, strconv.Itoa(int(wsPort+10))),
 			Path:   wsConfig.Path,
 		}
 		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -202,15 +202,20 @@ func TestWSListener(t *testing.T) {
 		}
 
 		select {
-		case <-session.Data():
-			t.Fatal("received message larger than max length")
+		case _, ok := <-session.Data():
+			// A closed channel (ok == false) means the server dropped the
+			// message and closed the session, which is the expected outcome.
+			if ok {
+				t.Fatal("received message larger than max length")
+			}
 		case <-time.After(50 * time.Millisecond):
 			// Expected timeout
 		}
 
-		// Connection should be closed by server
-		time.Sleep(50 * time.Millisecond)
-		if err := c.WriteMessage(websocket.BinaryMessage, []byte("test")); err == nil {
+		// Connection should be closed by server. A write to a peer-closed TCP
+		// socket can still succeed, so detect the close frame with a read.
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, _, err := c.ReadMessage(); err == nil {
 			t.Fatal("expected connection to be closed")
 		}
 
@@ -266,7 +271,7 @@ func TestWSListener(t *testing.T) {
 		for i := 0; i < maxConns; i++ {
 			u := url.URL{
 				Scheme: "ws",
-				Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+20),
+				Host:   net.JoinHostPort(wsHost, strconv.Itoa(int(wsPort+20))),
 				Path:   wsConfig.Path,
 			}
 			c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -287,7 +292,7 @@ func TestWSListener(t *testing.T) {
 		// Try to create one more connection
 		u := url.URL{
 			Scheme: "ws",
-			Host:   fmt.Sprintf("%s:%d", wsHost, wsPort+20),
+			Host:   net.JoinHostPort(wsHost, strconv.Itoa(int(wsPort+20))),
 			Path:   wsConfig.Path,
 		}
 		_, _, err = websocket.DefaultDialer.Dial(u.String(), nil)

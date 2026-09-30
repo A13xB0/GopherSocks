@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"context"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"golang.org/x/net/context"
 )
 
 // WebSocketServer implements a WebSocket streaming server with enhanced session management

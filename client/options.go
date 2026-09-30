@@ -20,7 +20,7 @@ type ClientConfig struct {
 	// BufferSize is the size of the read buffer
 	BufferSize int
 	// ProtocolConfig holds protocol-specific configuration
-	ProtocolConfig interface{}
+	ProtocolConfig any
 }
 
 // DefaultConfig returns a ClientConfig with default values

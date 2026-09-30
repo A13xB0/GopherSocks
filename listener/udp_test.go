@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,8 +14,11 @@ import (
 const (
 	udpHost   = "127.0.0.1"
 	udpHostV6 = "[::1]"
-	udpPort   = 9001
-	udpPortV6 = 9002
+)
+
+var (
+	udpPort   = testBasePort + 1
+	udpPortV6 = testBasePort + 2
 )
 
 // setupUDPListener creates and starts a UDP listener with the given options
@@ -64,7 +68,7 @@ func TestUDPListenerIPv4(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Connect client
-		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort))
+		conn, err := net.Dial("udp", net.JoinHostPort(udpHost, strconv.Itoa(int(udpPort))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +118,7 @@ func TestUDPListenerIPv4(t *testing.T) {
 		numClients := 3
 		conns := make([]net.Conn, numClients)
 		for i := 0; i < numClients; i++ {
-			conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort+3))
+			conn, err := net.Dial("udp", net.JoinHostPort(udpHost, strconv.Itoa(int(udpPort+3))))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -160,7 +164,7 @@ func TestUDPListenerIPv4(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Connect client
-		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", udpHost, udpPort+4))
+		conn, err := net.Dial("udp", net.JoinHostPort(udpHost, strconv.Itoa(int(udpPort+4))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +207,7 @@ func TestUDPListenerIPv6(t *testing.T) {
 		defer tListener.StopListener()
 
 		// Connect client
-		conn, err := net.Dial("udp6", fmt.Sprintf("%s:%d", udpHostV6, udpPortV6))
+		conn, err := net.Dial("udp6", net.JoinHostPort("::1", strconv.Itoa(int(udpPortV6))))
 		if err != nil {
 			t.Fatal(err)
 		}
