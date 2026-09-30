@@ -1,7 +1,23 @@
 package listener
 
 import (
+	"errors"
 	"fmt"
+)
+
+// Session and server lifecycle errors, available through context.Cause on a
+// session's Context.
+var (
+	// ErrSlowConsumer: the client didn't read fast enough and its send queue filled.
+	ErrSlowConsumer = errors.New("gophersocks: client is not reading fast enough")
+	// ErrSessionClosed: the session was closed.
+	ErrSessionClosed = errors.New("gophersocks: session closed")
+	// ErrServerFull: MaxConnections sessions are already open.
+	ErrServerFull = errors.New("gophersocks: server is at max connections")
+	// ErrServerStopped: StopListener was called.
+	ErrServerStopped = errors.New("gophersocks: server stopped")
+	// ErrMessageTooLarge: a message exceeds MaxLength.
+	ErrMessageTooLarge = errors.New("gophersocks: message exceeds maximum length")
 )
 
 // Error types for specific error cases

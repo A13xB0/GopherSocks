@@ -1,146 +1,146 @@
 package listener
 
 import (
-	"context"
 	"crypto/tls"
+	"log/slog"
 	"net"
-	"sync"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/A13xB0/GopherSocks/framing"
 	"github.com/quic-go/quic-go"
 )
 
-// BaseSession provides common session functionality for all protocol implementations
-type BaseSession struct {
-	ID            string
-	ClientAddr    net.Addr
-	DataChannel   chan []byte
-	LastReceived  time.Time
-	receivedMutex sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	logger        Logger
-}
-
-// NewBaseSession creates a new base session with the given parameters
-func NewBaseSession(addr net.Addr, ctx context.Context, logger Logger, config *ServerConfig) *BaseSession {
-	sessionCtx, cancel := context.WithCancel(ctx)
-	return &BaseSession{
-		ClientAddr:   addr,
-		DataChannel:  make(chan []byte, config.BufferSize),
-		LastReceived: time.Now(),
-		ctx:          sessionCtx,
-		cancel:       cancel,
-		logger:       logger,
-	}
-}
-
-// GetSessionID returns the unique session identifier
-func (s *BaseSession) GetSessionID() string {
-	return s.ID
-}
-
-// GetClientAddr returns the client's network address
-func (s *BaseSession) GetClientAddr() net.Addr {
-	return s.ClientAddr
-}
-
-// GetLastReceived returns the timestamp of the last received data
-func (s *BaseSession) GetLastReceived() time.Time {
-	s.receivedMutex.RLock()
-	defer s.receivedMutex.RUnlock()
-	return s.LastReceived
-}
-
-// updateLastReceived updates the last received timestamp with the current time
-func (s *BaseSession) updateLastReceived() {
-	s.receivedMutex.Lock()
-	s.LastReceived = time.Now()
-	s.receivedMutex.Unlock()
-}
-
-// Data returns the channel for receiving data from the client
-func (s *BaseSession) Data() chan []byte {
-	return s.DataChannel
-}
-
-// Context returns the session's context
-func (s *BaseSession) Context() context.Context {
-	return s.ctx
-}
-
-// Cancel cancels the session's context
-func (s *BaseSession) Cancel() {
-	s.cancel()
-}
-
-// Logger defines the interface for logging operations
+// Logger defines the interface for logging operations. Messages are constant
+// strings; details are passed as key/value pairs.
 type Logger interface {
-	Debug(msg string, keysAndValues ...interface{})
-	Info(msg string, keysAndValues ...interface{})
-	Warn(msg string, keysAndValues ...interface{})
-	Error(msg string, keysAndValues ...interface{})
+	Debug(msg string, keysAndValues ...any)
+	Info(msg string, keysAndValues ...any)
+	Warn(msg string, keysAndValues ...any)
+	Error(msg string, keysAndValues ...any)
 }
 
-// DefaultLogger provides a basic implementation of the Logger interface
+// DefaultLogger discards everything.
 type DefaultLogger struct{}
 
-func (l *DefaultLogger) Debug(msg string, keysAndValues ...interface{}) {
-
+// Debug discards the message.
+func (*DefaultLogger) Debug(string, ...any) {
+	// Logging is disabled unless a Logger is configured.
 }
-func (l *DefaultLogger) Info(msg string, keysAndValues ...interface{}) {
 
+// Info discards the message.
+func (*DefaultLogger) Info(string, ...any) {
+	// Logging is disabled unless a Logger is configured.
 }
-func (l *DefaultLogger) Warn(msg string, keysAndValues ...interface{}) {
 
+// Warn discards the message.
+func (*DefaultLogger) Warn(string, ...any) {
+	// Logging is disabled unless a Logger is configured.
 }
-func (l *DefaultLogger) Error(msg string, keysAndValues ...interface{}) {
 
+// Error discards the message.
+func (*DefaultLogger) Error(string, ...any) {
+	// Logging is disabled unless a Logger is configured.
 }
+
+// NewSlogLogger adapts a *slog.Logger to Logger.
+func NewSlogLogger(l *slog.Logger) Logger {
+	return slogLogger{l: l}
+}
+
+type slogLogger struct{ l *slog.Logger }
+
+func (s slogLogger) Debug(msg string, kv ...any) { s.l.Debug(msg, kv...) }
+func (s slogLogger) Info(msg string, kv ...any)  { s.l.Info(msg, kv...) }
+func (s slogLogger) Warn(msg string, kv ...any)  { s.l.Warn(msg, kv...) }
+func (s slogLogger) Error(msg string, kv ...any) { s.l.Error(msg, kv...) }
 
 // ServerOption defines a function type for configuring server options
 type ServerOption func(*ServerConfig)
 
-// Protocol-specific configurations
+// WebSocketConfig holds WebSocket-specific configuration.
 type WebSocketConfig struct {
 	ReadBufferSize  int
 	WriteBufferSize int
 	Path            string
+	// CheckOrigin decides whether to accept a browser's cross-origin request.
+	// nil accepts every origin, as before.
+	CheckOrigin func(r *http.Request) bool
 }
 
-// QUICConfig holds QUIC-specific configuration
+// DefaultALPN is the ALPN protocol of the original GopherSocks QUIC framing.
+const DefaultALPN = "gophersocks"
+
+// QUICConfig holds QUIC-specific configuration.
 type QUICConfig struct {
+	// TLSConfig is used as-is if set (NextProtos is filled from ALPN when
+	// empty). If nil, an ephemeral self-signed ECDSA certificate is created,
+	// which suits development only.
 	TLSConfig  *tls.Config
 	QUICConfig *quic.Config
-	Delimiter  []byte
+	// Delimiter sets the Legacy codec's delimiter for DefaultALPN.
+	Delimiter []byte
+	// ALPN lists the protocols the server accepts, most preferred first.
+	// Each needs a codec in Codecs.
+	ALPN []string
+	// Codecs maps an ALPN protocol to its framing.
+	Codecs map[string]framing.Codec
 }
 
 // ServerConfig holds common configuration for all protocol servers
 type ServerConfig struct {
-	MaxLength      uint32
-	BufferSize     int
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
-	Logger         Logger
+	MaxLength uint32
+	// BufferSize is the capacity of the channel returned by Session.Data.
+	BufferSize int
+	// ReadTimeout closes a TCP or WebSocket connection, or a UDP session,
+	// that sends nothing for this long. QUIC uses its own idle timeout.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	Logger       Logger
+	// MaxConnections is the most sessions served at once; more are rejected
+	// one by one while the server keeps running.
 	MaxConnections int
-	ProtocolConfig interface{} // Protocol-specific configuration
+	// SendQueueSize is how many outbound messages a session buffers. When
+	// it is full, SendToClient waits up to WriteTimeout before closing the
+	// session as a slow consumer.
+	SendQueueSize  int
+	ProtocolConfig any // *QUICConfig or *WebSocketConfig
 }
+
+const (
+	defaultSendQueueSize = 1024
+	defaultMaxLength     = 1024 * 1024
+)
 
 // defaultConfig returns a ServerConfig with default values
 func defaultConfig() *ServerConfig {
 	return &ServerConfig{
-		MaxLength:      1024 * 1024, // 1MB
+		MaxLength:      defaultMaxLength,
 		BufferSize:     100,
 		ReadTimeout:    time.Second * 30,
 		WriteTimeout:   time.Second * 30,
 		Logger:         &DefaultLogger{},
 		MaxConnections: 1000,
+		SendQueueSize:  defaultSendQueueSize,
 		ProtocolConfig: &WebSocketConfig{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			Path:            "/ws",
 		},
-		// Default QUIC configuration will be set in NewQUIC
+	}
+}
+
+func defaultQUICConfig() *QUICConfig {
+	return &QUICConfig{
+		QUICConfig: &quic.Config{
+			MaxIncomingStreams:    4, // a session uses one stream
+			MaxIncomingUniStreams: -1,
+		},
+		Delimiter: framing.DefaultDelimiter,
+		ALPN:      []string{DefaultALPN},
+		Codecs:    map[string]framing.Codec{},
 	}
 }
 
@@ -151,10 +151,17 @@ func WithMaxLength(length uint32) ServerOption {
 	}
 }
 
-// WithBufferSize sets the channel buffer size
+// WithBufferSize sets the capacity of the channel returned by Session.Data.
 func WithBufferSize(size int) ServerOption {
 	return func(c *ServerConfig) {
 		c.BufferSize = size
+	}
+}
+
+// WithSendQueueSize sets how many outbound messages a session buffers.
+func WithSendQueueSize(size int) ServerOption {
+	return func(c *ServerConfig) {
+		c.SendQueueSize = size
 	}
 }
 
@@ -199,6 +206,15 @@ func WithWebSocketPath(path string) ServerOption {
 	}
 }
 
+// WithWebSocketCheckOrigin sets the origin check for WebSocket upgrades.
+func WithWebSocketCheckOrigin(fn func(r *http.Request) bool) ServerOption {
+	return func(config *ServerConfig) {
+		if wsConfig, ok := config.ProtocolConfig.(*WebSocketConfig); ok {
+			wsConfig.CheckOrigin = fn
+		}
+	}
+}
+
 // WithTLSConfig sets the TLS configuration for QUIC
 func WithTLSConfig(tlsConfig *tls.Config) ServerOption {
 	return func(config *ServerConfig) {
@@ -217,11 +233,43 @@ func WithQUICConfig(quicConfig *quic.Config) ServerOption {
 	}
 }
 
-// WithQUICDelimiter sets the delimiter for QUIC messages
+// WithQUICDelimiter sets the delimiter of the Legacy framing used for the
+// default "gophersocks" ALPN protocol.
 func WithQUICDelimiter(delimiter []byte) ServerOption {
 	return func(config *ServerConfig) {
 		if quicConfig, ok := config.ProtocolConfig.(*QUICConfig); ok {
 			quicConfig.Delimiter = delimiter
 		}
 	}
+}
+
+// WithQUICCodec accepts clients that negotiate the ALPN protocol alpn and
+// frames their messages with codec. The newest option added is preferred,
+// so a server can offer a new format and still accept the default one:
+//
+//	listener.WithQUICCodec("nixie/2", framing.Uvarint)
+func WithQUICCodec(alpn string, codec framing.Codec) ServerOption {
+	return func(config *ServerConfig) {
+		q, ok := config.ProtocolConfig.(*QUICConfig)
+		if !ok {
+			return
+		}
+		if q.Codecs == nil {
+			q.Codecs = map[string]framing.Codec{}
+		}
+		q.Codecs[alpn] = codec
+		alpns := []string{alpn}
+		for _, p := range q.ALPN {
+			if p != alpn {
+				alpns = append(alpns, p)
+			}
+		}
+		q.ALPN = alpns
+	}
+}
+
+// hostPort joins host and port. host may be an IPv6 address with or without
+// brackets ("::1" or "[::1]"), as earlier versions accepted both.
+func hostPort(host string, port uint16) string {
+	return net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), strconv.Itoa(int(port)))
 }

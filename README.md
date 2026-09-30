@@ -6,62 +6,67 @@ GopherSocks is a networking library for Go that provides TCP, UDP, WebSocket, an
 
 ## Features
 
-### Protocol Support
-- **TCP Server**
-  - Length-prefixed message framing
-  - Automatic message validation
-  - Configurable buffer sizes
-  - Built-in connection management
+- **Four transports with one session API:** TCP, UDP, WebSocket and QUIC.
+- **A goroutine per session.** `Serve(ctx, handler)` runs your handler for each
+  session and closes the session when it returns.
+- **Backpressure.** `Session.Messages()` reads the next message only when you
+  ask for it, so a busy handler slows its client (TCP/QUIC flow control)
+  instead of buffering without bound.
+- **Non-blocking sends.** `SendToClient` queues to a per-session writer that
+  batches frames into one write. A client that stays `SendQueueSize` messages
+  behind for `WriteTimeout` is closed as a slow consumer.
+- **Framing you can evolve.** QUIC framing is chosen per connection by ALPN,
+  so a server can offer a new format and keep serving old clients.
+- **Clean lifecycle.** A full server rejects one connection and keeps
+  serving; `StopListener` closes every session and waits for its goroutines;
+  every session's `Context()` records why it closed.
 
-- **QUIC Server**
-  - Stream-based multiplexing with QUIC-go
-  - Built-in TLS 1.3 encryption with auto-generated certificates
-  - 2-byte length-prefixed message framing
-  - Triple newline delimiter (\n\n\n)
-  - Automatic stream management
-  - Low-latency transport
-  - Support for multiple concurrent streams
+### Framing
 
-- **UDP Server**
-  - Automatic session management
-  - Datagram validation
-  - Session timeout handling
-  - Support for multiple concurrent sessions
+| Transport | Frame |
+|---|---|
+| QUIC, ALPN `gophersocks` (default) | `payload \| uint16 length \| "\n\n\n"` (`framing.Legacy`, max 65,535 bytes) |
+| QUIC, your ALPN | any `framing.Codec`, e.g. `framing.Uvarint`: `uvarint length \| payload` |
+| TCP | `uint32 length \| payload` (`framing.Uint32`) |
+| UDP | one datagram per message |
+| WebSocket | one binary message per message |
 
-- **WebSocket Server**
-  - Binary message support
-  - Custom endpoint paths
-  - Configurable buffer sizes
-  - Automatic connection upgrade
-
-### Session Management
-- Unique session IDs using UUID v4
-- Last received time tracking
-- Automatic session cleanup
-- Session announcement middleware
-- Context-based cancellation
-- Clean shutdown handling
-
-### Configuration
-- Maximum message length limits
-- Configurable buffer sizes
-- Read/Write timeouts
-- Maximum concurrent connections
-- Custom logger support
-- Protocol-specific options
-
-### Error Handling
-- Protocol-specific error types
-- Detailed error messages
-- Error cause tracking
-- Connection error recovery
-- Validation error handling
+The Legacy decoder only accepts a delimiter whose length field matches, so a
+payload that contains `\n\n\n` (common in protobuf) no longer stalls the
+stream. For new protocol versions prefer `framing.Uvarint`, which has no
+delimiter at all.
 
 ## Installation
 
 ```bash
 go get github.com/A13xB0/GopherSocks
 ```
+
+## Serving sessions
+
+```go
+l, err := gophersocks.NewQUICListener("0.0.0.0", 8443,
+    gophersocks.WithMaxConnections(1000),
+    gophersocks.WithQUICCodec("myproto/2", framing.Uvarint), // offered first; old clients still get "gophersocks"
+)
+if err != nil {
+    return err
+}
+if err := l.Listen(); err != nil { // bind now; bind errors are returned here
+    return err
+}
+return l.Serve(ctx, func(ctx context.Context, s gophersocks.Session) {
+    for msg := range s.Messages() { // pulled: a slow handler slows this client only
+        if err := s.SendToClient(msg); err != nil {
+            return
+        }
+    }
+    // returning closes the session; context.Cause(s.Context()) says why it ended
+})
+```
+
+`StartListener` and `SetAnnounceNewSession` still work. The callback runs on
+the session's own goroutine and messages are read ahead into `Data()`.
 
 ## Usage Examples
 
@@ -75,6 +80,7 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
@@ -86,7 +92,7 @@ func main() {
         8001,
         gophersocks.WithMaxLength(1024*1024), // 1MB max message size
         gophersocks.WithBufferSize(100),      // Channel buffer size
-        gophersocks.WithTimeouts(30, 30),     // 30 second timeouts
+        gophersocks.WithTimeouts(30*time.Second, 30*time.Second),
         gophersocks.WithMaxConnections(1000), // Max connections
     )
     if err != nil {
@@ -136,6 +142,7 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
@@ -147,7 +154,7 @@ func main() {
         8001,
         gophersocks.WithMaxLength(1024*1024),
         gophersocks.WithBufferSize(100),
-        gophersocks.WithTimeouts(30, 30),
+        gophersocks.WithTimeouts(30*time.Second, 30*time.Second),
         gophersocks.WithMaxConnections(1000),
     )
     if err != nil {
@@ -195,6 +202,7 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
@@ -206,7 +214,7 @@ func main() {
         8001,
         gophersocks.WithMaxLength(1024*1024),
         gophersocks.WithBufferSize(100),
-        gophersocks.WithTimeouts(30, 30),
+        gophersocks.WithTimeouts(30*time.Second, 30*time.Second),
         gophersocks.WithMaxConnections(1000),
     )
     if err != nil {
@@ -270,7 +278,7 @@ func main() {
         8002,
         gophersocks.WithMaxLength(65507),     // Max UDP datagram
         gophersocks.WithBufferSize(1000),     // Larger buffer for UDP
-        gophersocks.WithTimeouts(60, 60),     // 60 second timeouts
+        gophersocks.WithTimeouts(60*time.Second, 60*time.Second),
         gophersocks.WithMaxConnections(1000), // Max sessions
     )
     if err != nil {
@@ -325,6 +333,7 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
@@ -336,7 +345,7 @@ func main() {
         8004,
         gophersocks.WithMaxLength(10000),      // Max message size
         gophersocks.WithBufferSize(100),       // Stream buffer size
-        gophersocks.WithTimeouts(30, 30),      // 30 second timeouts
+        gophersocks.WithTimeouts(30*time.Second, 30*time.Second),
         gophersocks.WithMaxConnections(1000),  // Max concurrent streams
     )
     if err != nil {
@@ -386,6 +395,7 @@ import (
     "os"
     "os/signal"
     "syscall"
+    "time"
 
     gophersocks "github.com/A13xB0/GopherSocks"
 )
@@ -397,7 +407,7 @@ func main() {
         8003,
         gophersocks.WithMaxLength(1024*1024),    // 1MB max message
         gophersocks.WithBufferSize(100),         // Buffer size
-        gophersocks.WithTimeouts(30, 30),        // 30 second timeouts
+        gophersocks.WithTimeouts(30*time.Second, 30*time.Second),
         gophersocks.WithWebSocketBufferSizes(1024, 1024),
         gophersocks.WithWebSocketPath("/ws"),
     )
@@ -442,68 +452,58 @@ func main() {
 
 ### Common Options
 ```go
-// Set maximum message length
-WithMaxLength(length uint32)
-
-// Set channel buffer size
-WithBufferSize(size int)
-
-// Set read/write timeouts in seconds
-WithTimeouts(read, write time.Duration)
-
-// Set maximum concurrent connections
-WithMaxConnections(max int)
-
-// Set custom logger
-WithLogger(logger Logger)
+WithMaxLength(length uint32)            // largest message, default 1 MB
+WithBufferSize(size int)                // capacity of Session.Data()
+WithSendQueueSize(size int)             // outbound messages buffered per session, default 1024
+WithTimeouts(read, write time.Duration) // idle timeout (TCP, WebSocket, UDP sessions) and write timeout
+WithMaxConnections(max int)             // concurrent sessions; extra connections are rejected
+WithLogger(logger listener.Logger)      // listener.NewSlogLogger(slog.Default()) adapts slog
 ```
 
 ### WebSocket Options
 ```go
-// Set WebSocket buffer sizes
 WithWebSocketBufferSizes(readSize, writeSize int)
-
-// Set WebSocket endpoint path
 WithWebSocketPath(path string)
+WithWebSocketCheckOrigin(fn func(*http.Request) bool) // default: any origin
 ```
 
 ### QUIC Options
 ```go
-// Set QUIC TLS configuration (defaults to auto-generated certificate)
-WithTLSConfig(config *tls.Config)
-
-// Set QUIC-specific configuration
+WithTLSConfig(config *tls.Config)                // default: ephemeral self-signed ECDSA cert (development)
 WithQUICConfig(config *quic.Config)
+WithQUICCodec(alpn string, codec framing.Codec)  // offer another framing, preferred over earlier ones
+listener.WithQUICDelimiter(delimiter []byte)     // Legacy framing delimiter, default "\n\n\n"
+```
 
-// Set custom delimiter (default: "\n\n\n")
+### Client Options
+```go
 WithDelimiter(delimiter []byte)
+WithClientTimeouts(read, write time.Duration)
+WithClientBufferSize(size int)
+WithClientMaxLength(n int)
+WithQUICInsecureSkipVerify(skip bool)
+WithQUICNextProtos(protos []string)
+WithQUICMinVersion(version uint16)
+WithClientQUICCodec(alpn string, codec framing.Codec)
 ```
 
 ## Session Interface
 
-The Session interface provides methods for handling network connections:
-
 ```go
 type Session interface {
-    // Get unique session ID
-    GetSessionID() string
-    
-    // Get client's network address
-    GetClientAddr() net.Addr
-    
-    // Get last received time
-    GetLastRecieved() time.Time
-    
-    // Get data channel for receiving messages
-    Data() chan []byte
-    
-    // Send data to client
-    SendToClient(data []byte) error
-    
-    // Close the session
+    SendToClient(data []byte) error // queued; don't modify data afterwards
+    Messages() iter.Seq[[]byte]      // pull-based reads (use this or Data, not both)
+    Data() chan []byte               // read-ahead channel, closed when the session ends
     CloseSession()
+    Context() context.Context       // ends on close; context.Cause says why
+    GetSessionID() string
+    GetClientAddr() net.Addr
+    GetLastRecieved() time.Time
 }
 ```
+
+Close causes: `ErrSessionClosed`, `ErrSlowConsumer`, `ErrServerStopped`, or
+the read/write error that ended the connection.
 
 ## Error Types
 

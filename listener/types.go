@@ -1,27 +1,46 @@
 package listener
 
 import (
+	"context"
+	"iter"
 	"net"
 	"time"
 )
 
-// This is a session interface for managing the active connection of the streaming protocol
+// Session is one client connection. Its methods are safe for concurrent use.
 type Session interface {
-	//Sends to client
+	// SendToClient queues data for the client and returns without waiting
+	// for the write. The session keeps data until it is written: don't
+	// modify it afterwards. When SendQueueSize messages are already queued
+	// it waits for space, for up to WriteTimeout; a client still that far
+	// behind is closed and ErrSlowConsumer returned.
 	SendToClient(data []byte) error
-	//Receive Data channel
+
+	// Messages yields messages from the client as they are read. The next
+	// message is read only when the loop asks for it, so a slow consumer
+	// slows the client down instead of buffering. It stops when the session
+	// closes; use either Messages or Data, not both.
+	Messages() iter.Seq[[]byte]
+
+	// Data returns a channel of messages from the client, closed when the
+	// session ends. Messages are read ahead into it up to BufferSize.
 	Data() (DataFromClient chan []byte)
-	//Close Session
+
+	// CloseSession closes the session.
 	CloseSession()
 
-	//Getters
+	// Context ends when the session closes; context.Cause tells why.
+	Context() context.Context
 
-	//Get Session UUID
+	// GetSessionID returns the session's unique ID.
 	GetSessionID() string
-	//Get Client Addr
+
+	// GetClientAddr returns the client's address.
 	GetClientAddr() net.Addr
-	//Get Last Recieved
+
+	// GetLastRecieved returns when the last message arrived.
 	GetLastRecieved() time.Time
 }
 
+// AnnounceMiddlewareFunc is called for each new session started by StartListener.
 type AnnounceMiddlewareFunc func(options any, session Session)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	gophersocks "github.com/A13xB0/GopherSocks"
 	"github.com/A13xB0/GopherSocks/listener"
@@ -20,9 +21,9 @@ func main() {
 		host,
 		port,
 		// Configure options
-		gophersocks.WithMaxLength(1024*1024), // 1MB max message size
-		gophersocks.WithBufferSize(100),      // Channel buffer size
-		gophersocks.WithTimeouts(30, 30),     // 30 second read/write timeouts
+		gophersocks.WithMaxLength(1024*1024),                     // 1MB max message size
+		gophersocks.WithBufferSize(100),                          // Channel buffer size
+		gophersocks.WithTimeouts(30*time.Second, 30*time.Second), // read/write timeouts
 	)
 	if err != nil {
 		panic(err)

@@ -1,24 +1,34 @@
 package client
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
-	"io"
 	"net"
+	"sync"
 
+	"github.com/A13xB0/GopherSocks/framing"
 	"github.com/quic-go/quic-go"
 )
 
-// QUICClient implements a QUIC connection client
+// ErrNotConnected is returned before Connect succeeds.
+var ErrNotConnected = errors.New("gophersocks client: not connected")
+
+// QUICClient implements a QUIC connection client. Send is safe for
+// concurrent use; Receive must be called from one goroutine at a time.
 type QUICClient struct {
-	conn      *quic.Conn
-	stream    *quic.Stream
-	addr      string
-	delimiter []byte
-	buffer    []byte
-	config    *ClientConfig
+	addr   string
+	config *ClientConfig
+
+	conn   *quic.Conn
+	stream *quic.Stream
+	codec  framing.Codec
+	r      *bufio.Reader
+
+	sendMu  sync.Mutex
+	sendBuf []byte
 }
 
 // NewQUICClient creates a new QUIC client with the given address
@@ -26,154 +36,102 @@ func NewQUICClient(addr string, config *ClientConfig) (*QUICClient, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("address is required")
 	}
-
-	return &QUICClient{
-		addr:      addr,
-		delimiter: config.Delimiter,
-		buffer:    make([]byte, 0),
-		config:    config,
-	}, nil
+	if config == nil {
+		config = DefaultConfig()
+	}
+	return &QUICClient{addr: addr, config: config}, nil
 }
 
-// Connect establishes a QUIC connection
+func (c *QUICClient) quicConfig() *QUICConfig {
+	if q, ok := c.config.ProtocolConfig.(*QUICConfig); ok {
+		return q
+	}
+	return DefaultConfig().ProtocolConfig.(*QUICConfig)
+}
+
+// Connect dials the server, opens the stream and picks the framing for the
+// negotiated ALPN protocol.
 func (c *QUICClient) Connect(ctx context.Context) error {
-	quicConfig, ok := c.config.ProtocolConfig.(*QUICConfig)
-	if !ok {
-		quicConfig = DefaultConfig().ProtocolConfig.(*QUICConfig)
-	}
-
+	qc := c.quicConfig()
 	tlsConf := &tls.Config{
-		NextProtos:         quicConfig.NextProtos,
-		InsecureSkipVerify: quicConfig.InsecureSkipVerify,
-		MinVersion:         quicConfig.MinVersion,
+		NextProtos:         qc.NextProtos,
+		InsecureSkipVerify: qc.InsecureSkipVerify, //nolint:gosec // opt-in, for self-signed development servers
+		MinVersion:         qc.MinVersion,
 	}
-
 	conn, err := quic.DialAddr(ctx, c.addr, tlsConf, &quic.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to dial QUIC: %w", err)
 	}
-	c.conn = conn
-
+	codec, err := c.codecFor(conn.ConnectionState().TLS.NegotiatedProtocol)
+	if err != nil {
+		_ = conn.CloseWithError(0, "unsupported protocol")
+		return err
+	}
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
+		_ = conn.CloseWithError(0, "no stream")
 		return fmt.Errorf("failed to open QUIC stream: %w", err)
 	}
-	c.stream = stream
-
+	c.conn, c.stream, c.codec = conn, stream, codec
+	c.r = bufio.NewReaderSize(stream, max(c.config.BufferSize, 4096))
 	return nil
 }
 
-// Send sends data over the QUIC connection
+func (c *QUICClient) codecFor(alpn string) (framing.Codec, error) {
+	if codec, ok := c.quicConfig().Codecs[alpn]; ok {
+		return codec, nil
+	}
+	if alpn == DefaultALPN || alpn == "" {
+		return framing.NewLegacy(c.config.Delimiter)
+	}
+	return nil, fmt.Errorf("gophersocks client: no codec for ALPN %q", alpn)
+}
+
+// Send sends one message.
 func (c *QUICClient) Send(data []byte) error {
 	if c.stream == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
-
-	dataLen := len(data)
-	if dataLen > 10000 {
-		return fmt.Errorf("data length exceeds maximum of 10000 bytes")
-	}
-
-	// Format: data + 2-byte length + delimiter
-	lengthBytes := []byte{byte(dataLen >> 8), byte(dataLen)}
-	framedData := append(data, lengthBytes...)
-	framedData = append(framedData, c.delimiter...)
-	_, err := c.stream.Write(framedData)
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	frame, err := c.codec.Append(c.sendBuf[:0], data)
 	if err != nil {
+		return err
+	}
+	c.sendBuf = frame
+	if _, err := c.stream.Write(frame); err != nil {
 		return fmt.Errorf("failed to write to QUIC stream: %w", err)
 	}
-
 	return nil
 }
 
-// Receive receives data from the QUIC connection
+// Receive returns the next message from the server.
 func (c *QUICClient) Receive() ([]byte, error) {
 	if c.stream == nil {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
+	return c.codec.Read(c.r, c.config.MaxLength)
+}
 
-	chunk := make([]byte, 1024)
-	for {
-		// Try to process any complete messages in the buffer
-		for {
-			// Look for delimiter
-			delimiterIndex := bytes.Index(c.buffer, c.delimiter)
-			if delimiterIndex == -1 {
-				break // No delimiter found, need more data
-			}
-
-			// Need at least 2 bytes before delimiter for length
-			if delimiterIndex < 2 {
-				// Invalid format, remove up to delimiter and continue
-				c.buffer = c.buffer[delimiterIndex+len(c.delimiter):]
-				continue
-			}
-
-			// Extract the 2-byte length
-			lengthBytes := c.buffer[delimiterIndex-2 : delimiterIndex]
-			length := int(lengthBytes[0])<<8 | int(lengthBytes[1])
-
-			// Verify length is within bounds
-			if length <= 0 || length > 10000 {
-				// Invalid length, remove up to delimiter and continue
-				c.buffer = c.buffer[delimiterIndex+len(c.delimiter):]
-				continue
-			}
-
-			// Verify we have enough data
-			messageStart := delimiterIndex - 2 - length
-			if messageStart < 0 {
-				break // Need more data
-			}
-
-			// Extract the message
-			message := c.buffer[messageStart : delimiterIndex-2]
-			// Remove processed data including delimiter
-			c.buffer = c.buffer[delimiterIndex+len(c.delimiter):]
-			return message, nil
-		}
-
-		// Read more data
-		n, err := c.stream.Read(chunk)
-		if err != nil {
-			if err == io.EOF {
-				// If we have remaining data, try to process it
-				if len(c.buffer) > 0 {
-					delimiterIndex := bytes.Index(c.buffer, c.delimiter)
-					if delimiterIndex != -1 && delimiterIndex >= 2 {
-						lengthBytes := c.buffer[delimiterIndex-2 : delimiterIndex]
-						length := int(lengthBytes[0])<<8 | int(lengthBytes[1])
-						if length > 0 && length <= 10000 {
-							messageStart := delimiterIndex - 2 - length
-							if messageStart >= 0 {
-								message := c.buffer[messageStart : delimiterIndex-2]
-								c.buffer = nil
-								return message, nil
-							}
-						}
-					}
-				}
-				return nil, io.EOF
-			}
-			return nil, fmt.Errorf("failed to read from QUIC stream: %w", err)
-		}
-		if n == 0 {
-			continue
-		}
-
-		c.buffer = append(c.buffer, chunk[:n]...)
+// NegotiatedProtocol returns the ALPN protocol agreed with the server.
+func (c *QUICClient) NegotiatedProtocol() string {
+	if c.conn == nil {
+		return ""
 	}
+	return c.conn.ConnectionState().TLS.NegotiatedProtocol
 }
 
 // Close closes the QUIC connection
 func (c *QUICClient) Close() error {
+	var err error
 	if c.stream != nil {
-		if err := c.stream.Close(); err != nil {
-			return fmt.Errorf("failed to close QUIC stream: %w", err)
-		}
+		err = c.stream.Close()
 	}
 	if c.conn != nil {
-		c.conn.CloseWithError(0, "client closed connection")
+		_ = c.conn.CloseWithError(0, "client closed connection")
+	}
+	if err != nil {
+		return fmt.Errorf("failed to close QUIC stream: %w", err)
 	}
 	return nil
 }
