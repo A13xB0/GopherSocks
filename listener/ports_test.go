@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"testing"
 )
 
 // testBasePort is the start of a block of 64 ports that are free for both
@@ -36,4 +37,24 @@ func blockFree(base, size uint16) bool {
 		_ = ul.Close()
 	}
 	return true
+}
+
+func freeUDPPort(t testing.TB) uint16 {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return uint16(c.LocalAddr().(*net.UDPAddr).Port)
+}
+
+func freeTCPPort(t testing.TB) uint16 {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return uint16(l.Addr().(*net.TCPAddr).Port)
 }

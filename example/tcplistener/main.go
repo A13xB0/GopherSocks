@@ -21,10 +21,10 @@ func main() {
 		host,
 		port,
 		// Configure options
-		gophersocks.WithMaxLength(1024*1024), // 1MB max message size
-		gophersocks.WithBufferSize(100),      // Channel buffer size
-		gophersocks.WithTimeouts(30, 30),     // 30 second read/write timeouts
-		gophersocks.WithMaxConnections(1000), // Maximum concurrent connections
+		gophersocks.WithMaxLength(1024*1024),                     // 1MB max message size
+		gophersocks.WithBufferSize(100),                          // Channel buffer size
+		gophersocks.WithTimeouts(30*time.Second, 30*time.Second), // read/write timeouts
+		gophersocks.WithMaxConnections(1000),                     // Maximum concurrent connections
 	)
 	if err != nil {
 		fmt.Printf("Failed to create TCP listener: %v\n", err)

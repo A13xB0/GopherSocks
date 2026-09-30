@@ -2,32 +2,23 @@ package listener
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
-// UDPServer implements a UDP streaming server with enhanced session management
-type UDPServer struct {
-	conn                   *net.UDPConn
-	addr                   string
-	sessions               map[string]Session
-	sessionsMutex          sync.RWMutex
-	announceMiddleware     AnnounceMiddlewareFunc
-	announceMiddlewareOpts any
-	wg                     sync.WaitGroup
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	*ServerConfig
-}
+// maxUDPPayload is the largest UDP payload.
+const maxUDPPayload = 65507
 
-// UDPSession represents an active UDP connection
-type UDPSession struct {
-	*BaseSession
-	server *UDPServer
+// UDPServer implements a UDP server. Each client address is a session; a
+// session with no datagrams for ReadTimeout is closed.
+type UDPServer struct {
+	*server
+	addr string
+
+	listenMu sync.Mutex
+	conn     *net.UDPConn
 }
 
 // NewUDP creates a new UDP server with the given configuration
@@ -36,302 +27,192 @@ func NewUDP(host string, port uint16, ctx context.Context, opts ...ServerOption)
 	for _, opt := range opts {
 		opt(config)
 	}
-
 	if err := ValidateConfig(config); err != nil {
 		return nil, NewConfigError("invalid configuration", err)
 	}
-
-	addr := fmt.Sprintf("%v:%v", host, port)
-	serverCtx, cancel := context.WithCancel(ctx)
-	server := &UDPServer{
-		addr:         addr,
-		ServerConfig: config,
-		sessions:     make(map[string]Session),
-		ctx:          serverCtx,
-		cancel:       cancel,
-	}
-
-	return server, nil
+	return &UDPServer{
+		server: newServer(ctx, config),
+		addr:   hostPort(host, port),
+	}, nil
 }
 
-// StartListener begins accepting UDP packets
-func (u *UDPServer) StartListener() error {
-	// Resolve address to support both IPv4 and IPv6
+func (u *UDPServer) Listen() error {
+	u.listenMu.Lock()
+	defer u.listenMu.Unlock()
+	if u.conn != nil {
+		return nil
+	}
 	addr, err := net.ResolveUDPAddr("udp", u.addr)
 	if err != nil {
 		return NewConnectionError("failed to resolve address", err)
 	}
-
-	// ListenUDP automatically handles both IPv4 and IPv6 if available
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return NewConnectionError("failed to start listener", err)
 	}
 	u.conn = conn
-	u.Logger.Info("UDP server listening on %s", u.addr)
-
-	go u.receiveStream()
+	u.log.Info("gophersocks: UDP server listening", "addr", u.addr)
 	return nil
 }
 
-// StopListener gracefully shuts down the UDP server
-func (u *UDPServer) StopListener() error {
-	u.Logger.Info("Shutting down UDP server")
-
-	// Cancel context to stop all goroutines
-	u.cancel()
-
-	// Close listener to unblock any reads
-	if err := u.conn.Close(); err != nil {
-		u.Logger.Error("Error closing listener: %v", err)
+// StartListener binds the address and serves in the background.
+func (u *UDPServer) StartListener() error {
+	if err := u.Listen(); err != nil {
+		return err
 	}
-
-	// Wait for all goroutines to finish
-	u.wg.Wait()
-
-	// Close all active sessions after goroutines are done
-	u.sessionsMutex.Lock()
-	for _, session := range u.sessions {
-		s := session.(*UDPSession)
-		close(s.DataChannel)
-		delete(u.sessions, s.GetClientAddr().String())
-	}
-	u.sessionsMutex.Unlock()
-
+	go func() {
+		if err := u.Serve(u.ctx, u.legacyHandler); err != nil {
+			u.log.Error("gophersocks: UDP serve stopped", "err", err)
+		}
+	}()
 	return nil
 }
 
-// SetAnnounceNewSession sets the middleware for announcing new sessions
-func (u *UDPServer) SetAnnounceNewSession(function AnnounceMiddlewareFunc, options any) {
-	u.announceMiddleware = function
-	u.announceMiddlewareOpts = options
-}
-
-// processPacket handles packet processing for a UDP session
-func (s *UDPSession) processPacket(data []byte) bool {
-	// Validate message length
-	if len(data) > int(s.server.MaxLength) {
-		s.server.Logger.Warn("Message exceeds maximum length from %s", s.GetClientAddr())
-		s.CloseSession()
-		return false
+// Serve reads datagrams until ctx ends or StopListener is called.
+func (u *UDPServer) Serve(ctx context.Context, h Handler) error {
+	if err := u.Listen(); err != nil {
+		return err
 	}
-
-	// Process the received data with non-blocking send
-	select {
-	case s.DataChannel <- data:
-		s.updateLastReceived()
-		return true
-	case <-s.ctx.Done():
-		return false
-	default:
-		s.server.Logger.Warn("Channel full, dropping packet from %s", s.GetClientAddr())
-		return false
+	if !u.enter() {
+		return ErrServerStopped
 	}
-}
-
-// receiveStream handles incoming UDP packets
-func (u *UDPServer) receiveStream() {
-	u.wg.Add(1)
 	defer u.wg.Done()
+	ctx, stop := u.serveContext(ctx)
+	defer stop()
+	unblock := context.AfterFunc(ctx, func() { _ = u.closeConn() })
+	defer unblock()
+	go u.reapIdle(ctx)
 
-	readChan := make(chan struct {
-		addr net.Addr
-		data []byte
-	}, u.BufferSize)
-	errChan := make(chan error, 1)
-
-	go u.readPackets(readChan, errChan)
-
+	// One byte over the limit tells an oversized datagram from a full one.
+	buf := make([]byte, min(int(u.cfg.MaxLength), maxUDPPayload)+1)
 	for {
-		select {
-		case <-u.ctx.Done():
-			u.Logger.Info("Stopping UDP receiver")
-			return
-		case err := <-errChan:
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				u.Logger.Warn("Temporary error reading packet: %v", err)
-				time.Sleep(100 * time.Millisecond) // Basic retry backoff
-				continue
+		n, addr, err := u.conn.ReadFromUDP(buf)
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
 			}
-			u.Logger.Error("Error reading packet: %v", err)
-			return
-		case read, ok := <-readChan:
-			if !ok {
-				return // Channel closed
-			}
-			u.handlePacket(read.addr, read.data)
+			return NewConnectionError("read failed", err)
 		}
+		if n == 0 {
+			continue
+		}
+		if n > int(u.cfg.MaxLength) {
+			u.log.Warn("gophersocks: dropping oversized datagram", "addr", addr.String(), "bytes", n)
+			continue
+		}
+		u.deliver(ctx, addr, append([]byte(nil), buf[:n]...), h)
 	}
 }
 
-// readPackets reads UDP packets in a separate goroutine
-func (u *UDPServer) readPackets(readChan chan<- struct {
-	addr net.Addr
-	data []byte
-}, errChan chan<- error) {
-	defer close(readChan)
-	defer close(errChan)
-
-	buffer := make([]byte, u.BufferSize)
-	for {
-		select {
-		case <-u.ctx.Done():
-			return
-		default:
-			// Set read deadline to allow context cancellation
-			u.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-			n, addr, err := u.conn.ReadFromUDP(buffer)
-			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					continue // Deadline exceeded, try again
-				}
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					u.Logger.Warn("Temporary error reading packet: %v", err)
-					time.Sleep(100 * time.Millisecond) // Basic retry backoff
-					continue
-				}
-				select {
-				case errChan <- err:
-				case <-u.ctx.Done():
-				}
-				return
-			}
-
-			if n == 0 {
-				continue
-			}
-			// Make a copy of the data since buffer will be reused
-			data := make([]byte, n)
-			copy(data, buffer[:n])
-
-			select {
-			case readChan <- struct {
-				addr net.Addr
-				data []byte
-			}{addr, data}:
-			case <-u.ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-// handlePacket processes a received packet and manages the associated session
-func (u *UDPServer) handlePacket(addr net.Addr, data []byte) {
-	clientAddrStr := addr.String()
-	var session Session
-	var exists bool
-
-	// Check if session exists
-	u.sessionsMutex.RLock()
-	session, exists = u.sessions[clientAddrStr]
-	u.sessionsMutex.RUnlock()
-
-	if !exists {
-		// Check max connections before creating new session
-		u.sessionsMutex.Lock()
-		if len(u.sessions) >= u.MaxConnections {
-			u.sessionsMutex.Unlock()
-			u.Logger.Warn("Max connections reached, rejecting packet from %s", addr)
+// deliver hands a datagram to its session, creating the session on first contact.
+func (u *UDPServer) deliver(ctx context.Context, addr *net.UDPAddr, msg []byte, h Handler) {
+	u.mu.RLock()
+	sess := u.byAddr[addr.String()]
+	u.mu.RUnlock()
+	if sess == nil {
+		if sess = u.open(ctx, addr, h); sess == nil {
 			return
 		}
-
-		// Create new session under write lock
-		session = u.newSession(addr)
-		u.sessionsMutex.Unlock()
 	}
-
-	// Process the packet in the session
-	if udpSession, ok := session.(*UDPSession); ok {
-		if !udpSession.processPacket(data) {
-			// If packet processing failed, close the session
-			udpSession.CloseSession()
-		}
-	} else {
-		u.Logger.Error("Invalid session type for %s", addr)
-		session.CloseSession()
+	sess.touch()
+	t := sess.t.(*udpTransport)
+	select {
+	case t.in <- msg:
+	default:
+		u.log.Warn("gophersocks: session queue full, dropping datagram", "session", sess.id)
 	}
 }
 
-// newSession creates a new UDP session
-func (u *UDPServer) newSession(addr net.Addr) *UDPSession {
-	base := NewBaseSession(addr, u.ctx, u.Logger, u.ServerConfig) // Use server context
-	base.ID = uuid.NewString()
-
-	session := &UDPSession{
-		BaseSession: base,
-		server:      u,
+func (u *UDPServer) open(ctx context.Context, addr *net.UDPAddr, h Handler) *session {
+	if !u.tryAdmit() {
+		return nil
 	}
-
-	u.sessions[addr.String()] = session
-
-	if u.announceMiddleware != nil {
-		u.announceMiddleware(u.announceMiddlewareOpts, session)
+	if !u.enter() {
+		u.release()
+		return nil
 	}
-
-	return session
+	t := &udpTransport{
+		conn: u.conn,
+		addr: addr,
+		in:   make(chan []byte, max(u.cfg.BufferSize, 1)),
+		done: make(chan struct{}),
+	}
+	sess := newSession(ctx, addr, t, u.cfg, u.remove)
+	u.add(sess)
+	go func() {
+		defer u.wg.Done()
+		u.serveSession(h, sess)
+	}()
+	return sess
 }
 
-// GetActiveSessions returns all active sessions
-func (u *UDPServer) GetActiveSessions() map[string]Session {
-	u.sessionsMutex.RLock()
-	defer u.sessionsMutex.RUnlock()
-	sessions := make(map[string]Session)
-	for k, v := range u.sessions {
-		sessions[k] = v
-	}
-	return sessions
-}
-
-// GetSession returns a specific session by client address
-func (u *UDPServer) GetSession(ClientAddr string) Session {
-	u.sessionsMutex.RLock()
-	defer u.sessionsMutex.RUnlock()
-	return u.sessions[ClientAddr]
-}
-
-// SendToClient sends data to the UDP client
-func (s *UDPSession) SendToClient(data []byte) error {
-	if len(data) > int(s.server.MaxLength) {
-		return NewProtocolError("message exceeds maximum length", nil)
-	}
-
-	if _, err := s.server.conn.WriteToUDP(data, s.GetClientAddr().(*net.UDPAddr)); err != nil {
-		return NewConnectionError("failed to send data", err)
-	}
-
-	return nil
-}
-
-// CloseSession closes the UDP session and cleans up resources
-func (s *UDPSession) CloseSession() {
-	s.server.closeSession(s)
-}
-
-// closeSession closes a UDP session and cleans up resources
-func (u *UDPServer) closeSession(session *UDPSession) {
-	u.sessionsMutex.Lock()
-	defer u.sessionsMutex.Unlock()
-
-	// Check if session is already closed
-	if _, exists := u.sessions[session.GetClientAddr().String()]; !exists {
+// reapIdle closes sessions that have been silent for ReadTimeout.
+func (u *UDPServer) reapIdle(ctx context.Context) {
+	if u.cfg.ReadTimeout <= 0 {
 		return
 	}
-
-	session.Cancel() // Cancel context from base session
-
-	select {
-	case <-session.DataChannel:
-		// Drain any remaining messages
-	default:
+	t := time.NewTicker(max(u.cfg.ReadTimeout/4, 10*time.Millisecond))
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			for _, s := range u.GetActiveSessions() {
+				if now.Sub(s.GetLastRecieved()) > u.cfg.ReadTimeout {
+					s.(*session).closeWith(context.DeadlineExceeded)
+				}
+			}
+		}
 	}
-	close(session.DataChannel)
-
-	delete(u.sessions, session.GetClientAddr().String())
-	u.Logger.Debug("Closed session for %s", session.GetClientAddr())
 }
 
-// GetLastRecieved implements the Session interface
-func (s *UDPSession) GetLastRecieved() time.Time {
-	return s.BaseSession.GetLastReceived()
+func (u *UDPServer) closeConn() error {
+	u.listenMu.Lock()
+	defer u.listenMu.Unlock()
+	if u.conn == nil {
+		return nil
+	}
+	err := u.conn.Close()
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+// StopListener stops reading, closes every session and waits for them.
+func (u *UDPServer) StopListener() error {
+	u.log.Info("gophersocks: shutting down UDP server", "addr", u.addr)
+	return u.stop(u.closeConn)
+}
+
+// udpTransport is one client address on the shared socket.
+type udpTransport struct {
+	conn      *net.UDPConn
+	addr      *net.UDPAddr
+	in        chan []byte // sent to only by the server's read loop; never closed
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func (t *udpTransport) readMessage() ([]byte, error) {
+	select {
+	case m := <-t.in:
+		return m, nil
+	case <-t.done:
+		return nil, ErrSessionClosed
+	}
+}
+
+func (t *udpTransport) writeMessages(msgs [][]byte) error {
+	for _, m := range msgs {
+		if _, err := t.conn.WriteToUDP(m, t.addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *udpTransport) close(error) {
+	t.closeOnce.Do(func() { close(t.done) })
 }

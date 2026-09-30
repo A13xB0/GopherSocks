@@ -271,3 +271,44 @@ func BenchmarkTCPInbound(b *testing.B) {
 	waitDone(b, done)
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "msgs/s")
 }
+
+// BenchmarkTCPInboundBurst: the client sends 64 frames per write, as a
+// client flushing a batch does. Same public API as BenchmarkTCPInbound.
+func BenchmarkTCPInboundBurst(b *testing.B) {
+	port := freeTCPPort(b)
+	l, err := listener.NewTCP("127.0.0.1", port, context.Background(), listener.WithBufferSize(4096))
+	if err != nil {
+		b.Fatal(err)
+	}
+	sessions := make(chan listener.Session, 1)
+	l.SetAnnounceNewSession(func(_ any, s listener.Session) { sessions <- s }, nil)
+	if err := l.StartListener(); err != nil {
+		b.Fatal(err)
+	}
+	defer l.StopListener()
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Close()
+	s := <-sessions
+	const perWrite = 64
+	writes := b.N/perWrite + 1
+	done := countMessages(s, int64(writes*perWrite))
+	payload := make([]byte, 256)
+	var burst []byte
+	for range perWrite {
+		burst = binary.BigEndian.AppendUint32(burst, uint32(len(payload)))
+		burst = append(burst, payload...)
+	}
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range writes {
+		if _, err := conn.Write(burst); err != nil {
+			b.Fatal(err)
+		}
+	}
+	waitDone(b, done)
+	b.ReportMetric(float64(writes*perWrite)/b.Elapsed().Seconds(), "msgs/s")
+}

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/A13xB0/GopherSocks/client"
+	"github.com/A13xB0/GopherSocks/framing"
 )
 
 // Common client options that apply to all protocols
@@ -65,4 +66,33 @@ func NewClientConfig(opts ...ClientOptFunc) *client.ClientConfig {
 		opt(config)
 	}
 	return config
+}
+
+// WithClientQUICCodec offers ALPN protocol alpn, preferred over the protocols
+// already offered, and frames messages with codec when the server picks it.
+func WithClientQUICCodec(alpn string, codec framing.Codec) ClientOptFunc {
+	return func(config *client.ClientConfig) {
+		quicConfig, ok := config.ProtocolConfig.(*client.QUICConfig)
+		if !ok {
+			return
+		}
+		if quicConfig.Codecs == nil {
+			quicConfig.Codecs = map[string]framing.Codec{}
+		}
+		quicConfig.Codecs[alpn] = codec
+		protos := []string{alpn}
+		for _, p := range quicConfig.NextProtos {
+			if p != alpn {
+				protos = append(protos, p)
+			}
+		}
+		quicConfig.NextProtos = protos
+	}
+}
+
+// WithClientMaxLength sets the largest message Receive accepts.
+func WithClientMaxLength(n int) ClientOptFunc {
+	return func(config *client.ClientConfig) {
+		config.MaxLength = n
+	}
 }

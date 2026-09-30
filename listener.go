@@ -1,4 +1,6 @@
-// This package handles streaming listener protocols as an interface
+// Package gophersocks provides TCP, UDP, WebSocket and QUIC servers and
+// clients that exchange framed messages, with per-session goroutines,
+// bounded send queues and backpressure.
 package gophersocks
 
 import (
@@ -7,24 +9,23 @@ import (
 	"github.com/A13xB0/GopherSocks/listener"
 )
 
-// Listener defines the interface for streaming TCP and UDP connections
-type Listener interface {
-	// StartReceiveStream Starts listener for stream transport
-	StartListener() error
+// Listener is a server for one protocol. See listener.Listener.
+type Listener = listener.Listener
 
-	// StopReceiveStream Stops listener for stream transport
-	StopListener() error
+// Session is one client connection. See listener.Session.
+type Session = listener.Session
 
-	// SetAnnounceNewSession Sets middleware for announcing a new session
-	SetAnnounceNewSession(function listener.AnnounceMiddlewareFunc, options any)
+// Handler serves one session. See listener.Handler.
+type Handler = listener.Handler
 
-	//Getters
+// NewQUICListener creates a new QUIC server.
+func NewQUICListener(host string, port uint16, opts ...ServerOptFunc) (Listener, error) {
+	return NewQUICListenerWithContext(host, port, context.Background(), opts...)
+}
 
-	// GetActiveSessions Get all sessions
-	GetActiveSessions() map[string]listener.Session
-
-	// GetSession Get session from ClientAddr (IP:Port)
-	GetSession(ClientAddr string) listener.Session
+// NewQUICListenerWithContext creates a new QUIC server with context.
+func NewQUICListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
+	return listener.NewQUIC(host, port, ctx, toListenerOptions(opts)...)
 }
 
 // NewTCPListener creates a new TCP stream handler
@@ -34,8 +35,7 @@ func NewTCPListener(host string, port uint16, opts ...ServerOptFunc) (Listener, 
 
 // NewTCPListenerWithContext creates a new TCP stream handler with context
 func NewTCPListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
-	listenerOpts := convertToListenerOptions(opts)
-	return listener.NewTCP(host, port, ctx, listenerOpts...)
+	return listener.NewTCP(host, port, ctx, toListenerOptions(opts)...)
 }
 
 // NewUDPListener creates a new UDP stream handler
@@ -45,43 +45,24 @@ func NewUDPListener(host string, port uint16, opts ...ServerOptFunc) (Listener, 
 
 // NewUDPListenerWithContext creates a new UDP stream handler with context
 func NewUDPListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
-	listenerOpts := convertToListenerOptions(opts)
-	return listener.NewUDP(host, port, ctx, listenerOpts...)
+	return listener.NewUDP(host, port, ctx, toListenerOptions(opts)...)
 }
 
-// NewWebSocketListener creates a new WebSocket stream handler (previously NewWebsocketsListener)
+// NewWebSocketListener creates a new WebSocket stream handler
 func NewWebSocketListener(host string, port uint16, opts ...ServerOptFunc) (Listener, error) {
 	return NewWebSocketListenerWithContext(host, port, context.Background(), opts...)
 }
 
 // NewWebSocketListenerWithContext creates a new WebSocket stream handler with context
 func NewWebSocketListenerWithContext(host string, port uint16, ctx context.Context, opts ...ServerOptFunc) (Listener, error) {
-	config := convertToServerConfig(opts...)
-	// Set default WebSocket-specific configuration
-	if config.ProtocolConfig == nil {
-		config.ProtocolConfig = &WebSocketConfig{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-			Path:            "/ws",
-		}
-	}
-	listenerOpts := convertToListenerOptions(opts)
-	return listener.NewWebSocket(host, port, ctx, listenerOpts...)
+	return listener.NewWebSocket(host, port, ctx, toListenerOptions(opts)...)
 }
 
-// convertToListenerOptions converts our ServerOptFunc options to listener.ServerOption options
-func convertToListenerOptions(opts []ServerOptFunc) []listener.ServerOption {
-	config := convertToServerConfig(opts...)
-	listenerOpts := make([]listener.ServerOption, 0)
-
-	// Convert our config settings to listener.ServerOption functions
-	listenerOpts = append(listenerOpts,
-		listener.WithMaxLength(config.MaxLength),
-		listener.WithBufferSize(config.BufferSize),
-		listener.WithLogger(config.Logger),
-		listener.WithTimeouts(config.ReadTimeout, config.WriteTimeout),
-		listener.WithMaxConnections(config.MaxConnections),
-	)
-
-	return listenerOpts
+// toListenerOptions passes every option through, protocol-specific ones included.
+func toListenerOptions(opts []ServerOptFunc) []listener.ServerOption {
+	out := make([]listener.ServerOption, len(opts))
+	for i, o := range opts {
+		out[i] = listener.ServerOption(o)
+	}
+	return out
 }

@@ -21,10 +21,10 @@ func main() {
 		host,
 		port,
 		// Configure options
-		gophersocks.WithMaxLength(65507),     // Maximum UDP datagram size
-		gophersocks.WithBufferSize(1000),     // Larger buffer for UDP datagrams
-		gophersocks.WithTimeouts(60, 60),     // Longer timeouts for UDP
-		gophersocks.WithMaxConnections(1000), // Maximum concurrent sessions
+		gophersocks.WithMaxLength(65507),                         // Maximum UDP datagram size
+		gophersocks.WithBufferSize(1000),                         // Larger buffer for UDP datagrams
+		gophersocks.WithTimeouts(60*time.Second, 60*time.Second), // longer idle timeout for UDP
+		gophersocks.WithMaxConnections(1000),                     // Maximum concurrent sessions
 	)
 	if err != nil {
 		fmt.Printf("Failed to create UDP listener: %v\n", err)

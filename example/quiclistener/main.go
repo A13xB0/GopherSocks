@@ -25,10 +25,10 @@ func main() {
 		port,
 		ctx,
 		// Configure options
-		listener.WithMaxLength(1024*1024), // 1MB max message size
-		listener.WithBufferSize(1000),     // Channel buffer size
-		listener.WithTimeouts(30, 30),     // 30 second read/write timeouts
-		listener.WithMaxConnections(1000), // Maximum concurrent connections
+		listener.WithMaxLength(1024*1024),                     // 1MB max message size
+		listener.WithBufferSize(1000),                         // Channel buffer size
+		listener.WithTimeouts(30*time.Second, 30*time.Second), // read/write timeouts
+		listener.WithMaxConnections(1000),                     // Maximum concurrent connections
 	)
 	if err != nil {
 		fmt.Printf("Failed to create QUIC listener: %v\n", err)

@@ -61,7 +61,8 @@ func (c *UDPClient) Receive() ([]byte, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	buffer := make([]byte, c.config.BufferSize)
+	// A UDP read truncates to the buffer, so always allow a full datagram.
+	buffer := make([]byte, 65536)
 	n, err := c.conn.Read(buffer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from UDP connection: %w", err)
