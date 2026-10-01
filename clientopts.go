@@ -43,6 +43,16 @@ func WithQUICInsecureSkipVerify(skip bool) ClientOptFunc {
 	}
 }
 
+// WithClientQUICDatagrams asks for QUIC datagrams; read them with
+// ReceiveDatagram (the client from NewQUICClient implements DatagramReceiver).
+func WithClientQUICDatagrams() ClientOptFunc {
+	return func(config *client.ClientConfig) {
+		if quicConfig, ok := config.ProtocolConfig.(*client.QUICConfig); ok {
+			quicConfig.Datagrams = true
+		}
+	}
+}
+
 func WithQUICNextProtos(protos []string) ClientOptFunc {
 	return func(config *client.ClientConfig) {
 		if quicConfig, ok := config.ProtocolConfig.(*client.QUICConfig); ok {

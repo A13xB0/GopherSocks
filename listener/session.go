@@ -94,6 +94,19 @@ func (s *session) Context() context.Context { return s.ctx }
 // CloseSession closes the session.
 func (s *session) CloseSession() { s.closeWith(ErrSessionClosed) }
 
+// SendDatagram sends data as one unreliable QUIC datagram. It never waits:
+// quic-go queues it, and drops it if the queue is full.
+func (s *session) SendDatagram(data []byte) error {
+	st, ok := s.t.(*streamTransport)
+	if !ok || st.datagram == nil {
+		return ErrDatagramsUnsupported
+	}
+	if s.ctx.Err() != nil {
+		return NewSessionError("session closed", context.Cause(s.ctx))
+	}
+	return st.datagram(data)
+}
+
 // Messages yields client messages, reading the next one only on demand.
 func (s *session) Messages() iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {

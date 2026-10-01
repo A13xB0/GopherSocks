@@ -12,6 +12,9 @@ var (
 	ErrSlowConsumer = errors.New("gophersocks: client is not reading fast enough")
 	// ErrSessionClosed: the session was closed.
 	ErrSessionClosed = errors.New("gophersocks: session closed")
+	// ErrDatagramsUnsupported: the connection has no datagrams (not QUIC,
+	// or one side didn't enable them).
+	ErrDatagramsUnsupported = errors.New("gophersocks: datagrams not supported on this connection")
 	// ErrServerFull: MaxConnections sessions are already open.
 	ErrServerFull = errors.New("gophersocks: server is at max connections")
 	// ErrServerStopped: StopListener was called.

@@ -26,6 +26,12 @@ func WithBufferSize(size int) ServerOptFunc {
 	return ServerOptFunc(listener.WithBufferSize(size))
 }
 
+// WithQUICDatagrams lets QUIC clients that also enable them receive
+// datagrams; sessions then implement listener.DatagramSender.
+func WithQUICDatagrams() ServerOptFunc {
+	return ServerOptFunc(listener.WithQUICDatagrams())
+}
+
 // WithSendQueueSize sets how many outbound messages a session buffers.
 func WithSendQueueSize(size int) ServerOptFunc {
 	return ServerOptFunc(listener.WithSendQueueSize(size))

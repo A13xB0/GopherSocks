@@ -18,6 +18,8 @@ type QUICConfig struct {
 	// Codecs maps an ALPN protocol to its framing. DefaultALPN uses the
 	// Legacy framing with ClientConfig.Delimiter unless set here.
 	Codecs map[string]framing.Codec
+	// Datagrams asks for QUIC datagrams; read them with ReceiveDatagram.
+	Datagrams bool
 }
 
 // ClientConfig holds common configuration for all protocol clients

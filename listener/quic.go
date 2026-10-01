@@ -252,6 +252,9 @@ func (q *QUICServer) handleConn(ctx context.Context, conn *quic.Conn, h Handler)
 			_ = conn.CloseWithError(quicCodeClosed, "session closed")
 		},
 	}
+	if conn.ConnectionState().SupportsDatagrams.Remote {
+		t.datagram = conn.SendDatagram
+	}
 	sess := newSession(ctx, conn.RemoteAddr(), t, q.cfg, q.remove)
 	// quic-go notices a dead connection (idle timeout, peer close) on its
 	// own; close the session then even if nobody is reading.

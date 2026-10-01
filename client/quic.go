@@ -58,7 +58,7 @@ func (c *QUICClient) Connect(ctx context.Context) error {
 		InsecureSkipVerify: qc.InsecureSkipVerify, //nolint:gosec // opt-in, for self-signed development servers
 		MinVersion:         qc.MinVersion,
 	}
-	conn, err := quic.DialAddr(ctx, c.addr, tlsConf, &quic.Config{})
+	conn, err := quic.DialAddr(ctx, c.addr, tlsConf, &quic.Config{EnableDatagrams: qc.Datagrams})
 	if err != nil {
 		return fmt.Errorf("failed to dial QUIC: %w", err)
 	}
@@ -150,4 +150,21 @@ func (c *QUICClient) RemoteAddr() net.Addr {
 		return nil
 	}
 	return c.conn.RemoteAddr()
+}
+
+// ReceiveDatagram waits for the next QUIC datagram from the server. It needs
+// the Datagrams option, and a server that enables them too.
+func (c *QUICClient) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	if c.conn == nil {
+		return nil, errors.New("gophersocks: not connected")
+	}
+	if !c.conn.ConnectionState().SupportsDatagrams.Remote {
+		return nil, errors.New("gophersocks: the server doesn't send datagrams")
+	}
+	return c.conn.ReceiveDatagram(ctx)
+}
+
+// DatagramsSupported reports whether both sides enabled datagrams.
+func (c *QUICClient) DatagramsSupported() bool {
+	return c.conn != nil && c.conn.ConnectionState().SupportsDatagrams.Remote && c.conn.ConnectionState().SupportsDatagrams.Local
 }

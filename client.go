@@ -39,6 +39,13 @@ func NewQUICClient(addr string, opts ...ClientOptFunc) (Client, error) {
 	return client.NewQUICClient(addr, config)
 }
 
+// DatagramReceiver is a client that can read QUIC datagrams (the QUIC
+// client, created with WithClientQUICDatagrams). Use a type assertion.
+type DatagramReceiver interface {
+	ReceiveDatagram(ctx context.Context) ([]byte, error)
+	DatagramsSupported() bool
+}
+
 // NewUDPClient creates a new UDP client with the given address and options
 func NewUDPClient(addr string, opts ...ClientOptFunc) (Client, error) {
 	if addr == "" {

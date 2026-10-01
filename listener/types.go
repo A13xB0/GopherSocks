@@ -42,5 +42,14 @@ type Session interface {
 	GetLastRecieved() time.Time
 }
 
+// DatagramSender is a Session that can send unreliable QUIC datagrams:
+// delivered at most once, possibly out of order or not at all, never held
+// up behind lost stream data. Use a type assertion; SendDatagram returns
+// ErrDatagramsUnsupported unless the server enables datagrams
+// (WithQUICDatagrams) and the client does too.
+type DatagramSender interface {
+	SendDatagram(data []byte) error
+}
+
 // AnnounceMiddlewareFunc is called for each new session started by StartListener.
 type AnnounceMiddlewareFunc func(options any, session Session)

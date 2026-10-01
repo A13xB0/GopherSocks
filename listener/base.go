@@ -268,6 +268,21 @@ func WithQUICCodec(alpn string, codec framing.Codec) ServerOption {
 	}
 }
 
+// WithQUICDatagrams lets QUIC clients that also enable them receive
+// datagrams (see DatagramSender).
+func WithQUICDatagrams() ServerOption {
+	return func(config *ServerConfig) {
+		q, ok := config.ProtocolConfig.(*QUICConfig)
+		if !ok {
+			return
+		}
+		if q.QUICConfig == nil {
+			q.QUICConfig = &quic.Config{}
+		}
+		q.QUICConfig.EnableDatagrams = true
+	}
+}
+
 // hostPort joins host and port. host may be an IPv6 address with or without
 // brackets ("::1" or "[::1]"), as earlier versions accepted both.
 func hostPort(host string, port uint16) string {
