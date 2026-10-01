@@ -37,7 +37,9 @@ func startDatagramEcho(t *testing.T, opts ...gophersocks.ServerOptFunc) (string,
 					continue
 				}
 				err := ds.SendDatagram(m)
-				if (err == nil) != ds.DatagramsEnabled() {
+				if ds.RTT() <= 0 {
+					err = fmt.Errorf("RTT %v after the handshake, want > 0", ds.RTT())
+				} else if (err == nil) != ds.DatagramsEnabled() {
 					err = fmt.Errorf("DatagramsEnabled %v but SendDatagram returned %v", ds.DatagramsEnabled(), err)
 				}
 				errs <- err

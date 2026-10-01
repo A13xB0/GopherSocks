@@ -26,7 +26,8 @@ type streamTransport struct {
 	setReadDeadline  func(time.Time) error // nil if the stream has its own idle timeout
 	setWriteDeadline func(time.Time) error
 	closeFn          func(cause error)
-	datagram         func([]byte) error // nil without QUIC datagrams
+	datagram         func([]byte) error   // nil without QUIC datagrams
+	rtt              func() time.Duration // QUIC only
 	buf              []byte
 }
 

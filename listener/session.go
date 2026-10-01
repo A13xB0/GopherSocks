@@ -113,6 +113,15 @@ func (s *session) DatagramsEnabled() bool {
 	return ok && st.datagram != nil
 }
 
+// RTT is the connection's smoothed round-trip time; 0 when the transport
+// doesn't measure one.
+func (s *session) RTT() time.Duration {
+	if st, ok := s.t.(*streamTransport); ok && st.rtt != nil {
+		return st.rtt()
+	}
+	return 0
+}
+
 // Messages yields client messages, reading the next one only on demand.
 func (s *session) Messages() iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {

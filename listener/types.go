@@ -52,6 +52,9 @@ type DatagramSender interface {
 	// DatagramsEnabled reports whether both ends enabled datagrams, so
 	// SendDatagram can work.
 	DatagramsEnabled() bool
+	// RTT is the connection's smoothed round-trip time, for choosing
+	// between datagrams and the stream.
+	RTT() time.Duration
 }
 
 // AnnounceMiddlewareFunc is called for each new session started by StartListener.
