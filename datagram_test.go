@@ -3,6 +3,7 @@ package gophersocks_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"testing"
@@ -35,7 +36,11 @@ func startDatagramEcho(t *testing.T, opts ...gophersocks.ServerOptFunc) (string,
 					errs <- errors.New("session is not a DatagramSender")
 					continue
 				}
-				errs <- ds.SendDatagram(m)
+				err := ds.SendDatagram(m)
+				if (err == nil) != ds.DatagramsEnabled() {
+					err = fmt.Errorf("DatagramsEnabled %v but SendDatagram returned %v", ds.DatagramsEnabled(), err)
+				}
+				errs <- err
 			}
 		})
 		close(served)

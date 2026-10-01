@@ -107,6 +107,12 @@ func (s *session) SendDatagram(data []byte) error {
 	return st.datagram(data)
 }
 
+// DatagramsEnabled reports whether both ends enabled datagrams.
+func (s *session) DatagramsEnabled() bool {
+	st, ok := s.t.(*streamTransport)
+	return ok && st.datagram != nil
+}
+
 // Messages yields client messages, reading the next one only on demand.
 func (s *session) Messages() iter.Seq[[]byte] {
 	return func(yield func([]byte) bool) {

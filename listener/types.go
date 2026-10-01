@@ -49,6 +49,9 @@ type Session interface {
 // (WithQUICDatagrams) and the client does too.
 type DatagramSender interface {
 	SendDatagram(data []byte) error
+	// DatagramsEnabled reports whether both ends enabled datagrams, so
+	// SendDatagram can work.
+	DatagramsEnabled() bool
 }
 
 // AnnounceMiddlewareFunc is called for each new session started by StartListener.
