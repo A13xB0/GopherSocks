@@ -3,17 +3,26 @@ package listener
 import (
 	"bufio"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/A13xB0/GopherSocks/framing"
 )
 
-// readBufferSize is the bufio size for stream reads.
-const readBufferSize = 32 * 1024
+// defaultReadBufferSize is the bufio size for stream reads unless
+// WithReadBufferSize says otherwise. Every session holds one for as long as
+// it's connected: a server with many clients sending small messages can
+// choose a smaller one (a larger message is still read whole, in more reads).
+const defaultReadBufferSize = 32 * 1024
 
-// maxRetainedWriteBuffer: larger write buffers are dropped after use so a
-// burst doesn't pin memory.
-const maxRetainedWriteBuffer = 1 << 20
+// maxPooledWriteBuffer: write buffers up to this size go back to the pool
+// after use; larger ones (a rare burst) are left to the garbage collector.
+const maxPooledWriteBuffer = 1 << 20
+
+// writeBuffers are shared by every session: a session takes one only while
+// it writes a batch, so an idle session holds none, and one that once sent a
+// burst doesn't keep the burst's buffer for the rest of its life.
+var writeBuffers = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
 
 // streamTransport frames messages on a byte stream (TCP, QUIC).
 type streamTransport struct {
@@ -28,7 +37,6 @@ type streamTransport struct {
 	closeFn          func(cause error)
 	datagram         func([]byte) error   // nil without QUIC datagrams
 	rtt              func() time.Duration // QUIC only
-	buf              []byte
 }
 
 func (t *streamTransport) readMessage() ([]byte, error) {
@@ -46,7 +54,14 @@ func (t *streamTransport) readMessage() ([]byte, error) {
 // so frames from one batch can't interleave with anything and small
 // messages share a packet.
 func (t *streamTransport) writeMessages(msgs [][]byte) error {
-	buf := t.buf[:0]
+	pb := writeBuffers.Get().(*[]byte)
+	buf := (*pb)[:0]
+	defer func() {
+		if cap(buf) <= maxPooledWriteBuffer {
+			*pb = buf[:0]
+			writeBuffers.Put(pb)
+		}
+	}()
 	for _, m := range msgs {
 		var err error
 		if buf, err = t.codec.Append(buf, m); err != nil {
@@ -59,14 +74,14 @@ func (t *streamTransport) writeMessages(msgs [][]byte) error {
 		}
 	}
 	_, err := t.w.Write(buf)
-	if cap(buf) <= maxRetainedWriteBuffer {
-		t.buf = buf
-	} else {
-		t.buf = nil
-	}
 	return err
 }
 
 func (t *streamTransport) close(cause error) { t.closeFn(cause) }
 
-func newReader(r io.Reader) *bufio.Reader { return bufio.NewReaderSize(r, readBufferSize) }
+func newReader(r io.Reader, size int) *bufio.Reader {
+	if size <= 0 {
+		size = defaultReadBufferSize
+	}
+	return bufio.NewReaderSize(r, size)
+}

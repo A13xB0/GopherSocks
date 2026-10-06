@@ -43,11 +43,11 @@ type quicFixture struct {
 	addr     string
 }
 
-func startQUIC(tb testing.TB) *quicFixture {
+func startQUIC(tb testing.TB, opts ...listener.ServerOption) *quicFixture {
 	tb.Helper()
 	port := freePort(tb)
 	l, err := listener.NewQUIC("127.0.0.1", port, context.Background(),
-		listener.WithMaxConnections(2000), listener.WithBufferSize(4096))
+		append([]listener.ServerOption{listener.WithMaxConnections(2000), listener.WithBufferSize(4096)}, opts...)...)
 	if err != nil {
 		tb.Fatal(err)
 	}

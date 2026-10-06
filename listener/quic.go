@@ -242,7 +242,7 @@ func (q *QUICServer) handleConn(ctx context.Context, conn *quic.Conn, h Handler)
 		return
 	}
 	t := &streamTransport{
-		r:                newReader(stream),
+		r:                newReader(stream, q.cfg.ReadBufferSize),
 		w:                stream,
 		codec:            codec,
 		max:              min(int(q.cfg.MaxLength), codec.MaxPayload()),

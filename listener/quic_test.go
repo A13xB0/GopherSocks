@@ -433,3 +433,19 @@ func TestQUICRejectsUnknownALPNCodec(t *testing.T) {
 		t.Fatal("a protocol without a codec should fail to start")
 	}
 }
+
+// A message many times larger than the read buffer is still read whole,
+// and messages around it are unaffected.
+func TestQUICSmallReadBuffer(t *testing.T) {
+	qs := serveQUIC(t, echo, WithReadBufferSize(512))
+	c := dialQUIC(t, qs.addr)
+	for _, n := range []int{10, 511, 512, 513, 60000, 10} {
+		msg := bytes.Repeat([]byte{byte(n)}, n)
+		if err := c.Send(msg); err != nil {
+			t.Fatal(err)
+		}
+		if got := receive(t, c); !bytes.Equal(got, msg) {
+			t.Fatalf("%d bytes: got %d back", n, len(got))
+		}
+	}
+}

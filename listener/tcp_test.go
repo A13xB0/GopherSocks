@@ -1,6 +1,7 @@
 package listener
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -327,4 +328,47 @@ func TestTCPListenerIPv6(t *testing.T) {
 
 func utilityGetSessionTCP(options any, session Session) {
 	options.(chan Session) <- session
+}
+
+// With a read buffer far smaller than a message, messages sent back to back
+// in one write still arrive whole and in order.
+func TestTCPSmallReadBuffer(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := uint16(probe.Addr().(*net.TCPAddr).Port)
+	_ = probe.Close()
+	l, sessions, _ := setupTCPListener(t, "127.0.0.1", port, WithReadBufferSize(512), WithMaxLength(1<<20))
+	defer l.StopListener()
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	sizes := []int{10, 511, 512, 513, 60000, 10}
+	var wire []byte
+	for _, n := range sizes {
+		wire = binary.BigEndian.AppendUint32(wire, uint32(n))
+		wire = append(wire, bytes.Repeat([]byte{byte(n)}, n)...)
+	}
+	if _, err := conn.Write(wire); err != nil {
+		t.Fatal(err)
+	}
+	var s Session
+	select {
+	case s = <-sessions:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no session")
+	}
+	for _, n := range sizes {
+		select {
+		case got := <-s.Data():
+			if !bytes.Equal(got, bytes.Repeat([]byte{byte(n)}, n)) {
+				t.Fatalf("%d bytes: got %d", n, len(got))
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d bytes: nothing arrived", n)
+		}
+	}
 }
