@@ -108,7 +108,7 @@ func (t *TCPServer) accept(ctx context.Context, conn net.Conn, h Handler) {
 		return
 	}
 	tr := &streamTransport{
-		r:                newReader(conn),
+		r:                newReader(conn, t.cfg.ReadBufferSize),
 		w:                conn,
 		codec:            framing.Uint32,
 		max:              int(t.cfg.MaxLength),

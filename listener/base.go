@@ -94,6 +94,9 @@ type ServerConfig struct {
 	MaxLength uint32
 	// BufferSize is the capacity of the channel returned by Session.Data.
 	BufferSize int
+	// ReadBufferSize is the read buffer each TCP or QUIC session holds, in
+	// bytes (0: 32 KB). Messages larger than it are still read whole.
+	ReadBufferSize int
 	// ReadTimeout closes a TCP or WebSocket connection, or a UDP session,
 	// that sends nothing for this long. QUIC uses its own idle timeout.
 	ReadTimeout  time.Duration
@@ -141,6 +144,16 @@ func defaultQUICConfig() *QUICConfig {
 		Delimiter: framing.DefaultDelimiter,
 		ALPN:      []string{DefaultALPN},
 		Codecs:    map[string]framing.Codec{},
+	}
+}
+
+// WithReadBufferSize sets the read buffer each TCP or QUIC session holds, in
+// bytes (default 32 KB). A server with many clients that send small messages
+// can save memory with a smaller one, such as 4 KB; reading large messages
+// in quick succession is a little slower with it.
+func WithReadBufferSize(size int) ServerOption {
+	return func(c *ServerConfig) {
+		c.ReadBufferSize = size
 	}
 }
 
